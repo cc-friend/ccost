@@ -3,6 +3,7 @@ pub mod grouper;
 pub mod parser;
 pub mod pricing;
 pub mod types;
+pub mod utils;
 
 pub use formatters::chart::{render_chart, render_chart_from_records};
 pub use formatters::csv::{format_csv, format_tsv};
