@@ -8,7 +8,7 @@ use super::types::{SlLoadOptions, SlRecord};
 
 #[derive(Deserialize)]
 struct RawRateLimitWindow {
-    used_percentage: Option<u8>,
+    used_percentage: Option<f64>,
     resets_at: Option<i64>,
 }
 
@@ -20,7 +20,7 @@ struct RawRateLimits {
 
 #[derive(Deserialize)]
 struct RawContextWindow {
-    used_percentage: Option<u8>,
+    used_percentage: Option<f64>,
     context_window_size: u64,
 }
 
@@ -218,11 +218,11 @@ pub fn load_sl_records(file_path: &str, opts: &SlLoadOptions) -> (Vec<SlRecord>,
         let (five_hour_pct, five_hour_resets_at, seven_day_pct, seven_day_resets_at) =
             match &d.rate_limits {
                 Some(rl) => {
-                    let fh_pct = rl.five_hour.as_ref().and_then(|w| w.used_percentage);
+                    let fh_pct = rl.five_hour.as_ref().and_then(|w| w.used_percentage).map(|v| v.round() as u8);
                     let fh_resets = rl.five_hour.as_ref()
                         .and_then(|w| w.resets_at)
                         .and_then(|secs| Utc.timestamp_opt(secs, 0).single());
-                    let sd_pct = rl.seven_day.as_ref().and_then(|w| w.used_percentage);
+                    let sd_pct = rl.seven_day.as_ref().and_then(|w| w.used_percentage).map(|v| v.round() as u8);
                     let sd_resets = rl.seven_day.as_ref()
                         .and_then(|w| w.resets_at)
                         .and_then(|secs| Utc.timestamp_opt(secs, 0).single());
@@ -243,7 +243,7 @@ pub fn load_sl_records(file_path: &str, opts: &SlLoadOptions) -> (Vec<SlRecord>,
             api_duration_ms: d.cost.total_api_duration_ms,
             lines_added: d.cost.total_lines_added,
             lines_removed: d.cost.total_lines_removed,
-            context_pct: d.context_window.used_percentage,
+            context_pct: d.context_window.used_percentage.map(|v| v.round() as u8),
             context_size: d.context_window.context_window_size,
             five_hour_pct,
             five_hour_resets_at,
