@@ -3,6 +3,7 @@ use serde::Deserialize;
 use std::fs;
 
 use super::types::{SlLoadOptions, SlRecord};
+use crate::utils::parse_fixed_offset;
 
 // ─── Raw deserialization structs ───────────────────────────────────────────
 
@@ -73,19 +74,6 @@ enum ResolvedTz {
     Utc,
     Fixed(chrono::FixedOffset),
     Iana(chrono_tz::Tz),
-}
-
-fn parse_fixed_offset(s: &str) -> Option<chrono::FixedOffset> {
-    let sign = if s.starts_with('+') { 1 } else { -1 };
-    let rest = &s[1..];
-    let parts: Vec<&str> = rest.split(':').collect();
-    if parts.len() != 2 {
-        return None;
-    }
-    let hours: i32 = parts[0].parse().ok()?;
-    let minutes: i32 = parts[1].parse().ok()?;
-    let total_seconds = sign * (hours * 3600 + minutes * 60);
-    chrono::FixedOffset::east_opt(total_seconds)
 }
 
 fn resolve_tz(tz: Option<&str>) -> ResolvedTz {

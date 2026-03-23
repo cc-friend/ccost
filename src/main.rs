@@ -25,6 +25,8 @@ use ccost::*;
 
 const VERSION: &str = "1.0.0";
 
+type ChartData = (Vec<String>, Vec<f64>, String, fn(f64) -> String);
+
 fn print_help() {
     let help = r#"Usage: ccost [options]
 
@@ -99,10 +101,11 @@ fn build_command() -> Command {
         )
         .arg(Arg::new("chart").long("chart").value_name("mode"))
         .arg(Arg::new("copy").long("copy").value_name("format"))
-        .arg(Arg::new("help").long("help").action(ArgAction::SetTrue))
+        .arg(Arg::new("help").long("help").short('h').action(ArgAction::SetTrue))
         .arg(
             Arg::new("version")
                 .long("version")
+                .short('V')
                 .action(ArgAction::SetTrue),
         )
         .subcommand(build_sl_subcommand())
@@ -152,7 +155,7 @@ fn build_sl_subcommand() -> Command {
                 .long("pricing-data")
                 .value_name("path"),
         )
-        .arg(Arg::new("help").long("help").action(ArgAction::SetTrue))
+        .arg(Arg::new("help").long("help").short('h').action(ArgAction::SetTrue))
 }
 
 fn main() {
@@ -201,9 +204,9 @@ fn main() {
             errors.push("--per: maximum 2 values allowed".to_string());
         }
         for val in &per_values {
-            match GroupDimension::from_str(val) {
-                Some(dim) => dimensions.push(dim),
-                None => errors.push(format!(
+            match val.parse::<GroupDimension>() {
+                Ok(dim) => dimensions.push(dim),
+                Err(_) => errors.push(format!(
                     "--per: invalid dimension '{}'. Valid: {}",
                     val,
                     GroupDimension::all_valid().join(", ")
@@ -227,9 +230,9 @@ fn main() {
     // --order: validate
     let order_str = matches.get_one::<String>("order").cloned();
     let order = if let Some(ref o) = order_str {
-        match SortOrder::from_str(o) {
-            Some(ord) => ord,
-            None => {
+        match o.parse::<SortOrder>() {
+            Ok(ord) => ord,
+            Err(_) => {
                 errors.push(format!("--order: invalid value '{}'. Valid: asc, desc", o));
                 SortOrder::Asc
             }
@@ -626,7 +629,7 @@ fn main() {
     };
 
     // Determine filename
-    let ext = output_fmt.map(|f| ext_for_format(f)).unwrap_or("txt");
+    let ext = output_fmt.map(ext_for_format).unwrap_or("txt");
     let target_filename = filename_opt.unwrap_or_else(|| format!("ccost.{}", ext));
 
     if let Err(e) = fs::write(&target_filename, &file_content) {
@@ -772,9 +775,9 @@ fn run_sl(matches: &clap::ArgMatches) {
     // --order: validate
     let order_str = matches.get_one::<String>("order").cloned();
     let order = if let Some(ref o) = order_str {
-        match SortOrder::from_str(o) {
-            Some(ord) => ord,
-            None => {
+        match o.parse::<SortOrder>() {
+            Ok(ord) => ord,
+            Err(_) => {
                 errors.push(format!("--order: invalid value '{}'. Valid: asc, desc", o));
                 SortOrder::Asc
             }
@@ -838,10 +841,10 @@ fn run_sl(matches: &clap::ArgMatches) {
         errors.push("--5hfrom/--5hto/--1wfrom/--1wto cannot be used with --from/--to".to_string());
     }
 
-    // --cost-diff warning
+    // --cost-diff requires --per session
     let cost_diff = matches.get_flag("cost-diff");
     if cost_diff && view_mode != SlViewMode::Session {
-        eprintln!("Warning: --cost-diff is only effective with --per session");
+        errors.push("--cost-diff requires --per session".to_string());
     }
 
     // --nopromo (default: promo adjustment enabled)
@@ -960,7 +963,7 @@ fn run_sl(matches: &clap::ArgMatches) {
 
     // Chart mode
     if let Some(chart) = chart_mode {
-        let (keys, values, title, y_label_fn): (Vec<String>, Vec<f64>, String, fn(f64) -> String) =
+        let (keys, values, title, y_label_fn): ChartData =
             match chart {
                 SlChartMode::FiveHour => {
                     let entries = aggregate_ratelimit(&records);
@@ -1003,11 +1006,7 @@ fn run_sl(matches: &clap::ArgMatches) {
 
         // Handle --copy for chart
         if let Some(ref copy_fmt) = copy_format {
-            let copy_content = if copy_fmt == "txt" {
-                chart_output.clone()
-            } else {
-                chart_output.clone()
-            };
+            let copy_content = chart_output.clone();
             match copy_to_clipboard(&copy_content) {
                 Ok(()) => eprintln!("Copied {} to clipboard", copy_fmt),
                 Err(e) => eprintln!("Error: {}", e),
@@ -1133,7 +1132,7 @@ fn run_sl(matches: &clap::ArgMatches) {
                         _ => unreachable!(),
                     }
                 }
-                "txt" | _ => generate_sl_table_content(
+                _ => generate_sl_table_content(
                     view,
                     recs,
                     &opts,
@@ -1194,7 +1193,7 @@ fn run_sl(matches: &clap::ArgMatches) {
         }
     };
 
-    let ext = output_fmt.map(|f| ext_for_format(f)).unwrap_or("txt");
+    let ext = output_fmt.map(ext_for_format).unwrap_or("txt");
     let target_filename = filename_opt.unwrap_or_else(|| format!("ccost.{}", ext));
 
     if let Err(e) = fs::write(&target_filename, &file_content) {
@@ -1204,6 +1203,7 @@ fn run_sl(matches: &clap::ArgMatches) {
     eprintln!("Wrote report to {}", target_filename);
 }
 
+#[allow(clippy::too_many_arguments)]
 fn generate_sl_table_content(
     view_mode: &SlViewMode,
     records: &[ccost::sl::SlRecord],
@@ -1280,6 +1280,7 @@ fn generate_sl_table_content(
 
 /// Generate structured table data (headers, rows, totals) for any sl view.
 /// Used for markdown, html, tsv output where we need raw data, not rendered box-drawing.
+#[allow(clippy::too_many_arguments)]
 fn generate_sl_table_data(
     view_mode: &SlViewMode,
     records: &[ccost::sl::SlRecord],
@@ -1433,11 +1434,13 @@ fn compute_cost_diffs(
             // Try exact match first, then prefix match
             let litellm_cost = cost_by_session.get(&s.session_id).copied().or_else(|| {
                 // Prefix match: find conversation session whose ID starts with the sl session_id
+                // Use longest common prefix (most specific match) for deterministic results
                 cost_by_session
                     .iter()
-                    .find(|(k, _)| {
+                    .filter(|(k, _)| {
                         k.starts_with(&s.session_id) || s.session_id.starts_with(k.as_str())
                     })
+                    .max_by_key(|(k, _)| k.len().min(s.session_id.len()))
                     .map(|(_, v)| *v)
             });
 

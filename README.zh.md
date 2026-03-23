@@ -233,7 +233,7 @@ ccost --copy json
 ccost sl --per 5h --cost decimal
 
 # 状态栏：费用对比
-ccost sl --cost-diff --cost decimal
+ccost sl --per session --cost-diff --cost decimal
 
 # 状态栏：速率限制图表
 ccost sl --chart 5h
@@ -245,7 +245,7 @@ ccost 也是一个 Rust 库。
 
 ```toml
 [dependencies]
-ccost = { path = "../ccost-rs" }
+ccost = { path = "../ccost" }
 ```
 
 ### 处理流程

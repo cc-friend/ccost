@@ -1,4 +1,5 @@
 use crate::types::{GroupedData, PriceMode, PricedTokenRecord};
+use crate::utils::parse_fixed_offset;
 use chrono::{DateTime, Local, Utc};
 use std::collections::BTreeMap;
 
@@ -136,20 +137,6 @@ fn format_in_tz(date: &DateTime<Utc>, tz: Option<&str>) -> String {
     }
 }
 
-/// Parse a "+HH:MM" or "-HH:MM" string into a FixedOffset.
-fn parse_fixed_offset(s: &str) -> Option<chrono::FixedOffset> {
-    let sign = if s.starts_with('+') { 1 } else { -1 };
-    let rest = &s[1..];
-    let parts: Vec<&str> = rest.split(':').collect();
-    if parts.len() != 2 {
-        return None;
-    }
-    let hours: i32 = parts[0].parse().ok()?;
-    let minutes: i32 = parts[1].parse().ok()?;
-    let total_seconds = sign * (hours * 3600 + minutes * 60);
-    chrono::FixedOffset::east_opt(total_seconds)
-}
-
 /// Format x-axis label for a bucket key based on granularity.
 fn x_label_for_granularity(key: &str, granularity: Granularity) -> String {
     match granularity {
@@ -229,7 +216,7 @@ fn render_chart_core(
     };
 
     // Generate y-axis label positions: top, bottom, and evenly spaced
-    let num_y_labels = braille_rows.min(6).max(2);
+    let num_y_labels = braille_rows.clamp(2, 6);
     let mut y_positions: Vec<usize> = Vec::new();
     for i in 0..num_y_labels {
         let pos = if num_y_labels == 1 {
@@ -308,6 +295,7 @@ fn render_chart_core(
     // Convert grid to braille characters
     let mut braille_chars: Vec<Vec<char>> = vec![vec![' '; chart_cols]; braille_rows];
 
+    #[allow(clippy::needless_range_loop)]
     for br in 0..braille_rows {
         for bc in 0..chart_cols {
             let mut pattern: u8 = 0;
@@ -346,6 +334,7 @@ fn render_chart_core(
         .collect();
 
     // Chart rows
+    #[allow(clippy::needless_range_loop)]
     for br in 0..braille_rows {
         // Y-axis label
         let label = if let Some(label) = y_label_map.get(&br) {
@@ -497,7 +486,7 @@ pub fn render_chart_raw(
     let braille_rows = height.unwrap_or(15);
 
     // Generate y-axis label positions: top, bottom, and evenly spaced
-    let num_y_labels = braille_rows.min(6).max(2);
+    let num_y_labels = braille_rows.clamp(2, 6);
     let mut y_positions: Vec<usize> = Vec::new();
     for i in 0..num_y_labels {
         let pos = if num_y_labels == 1 {
@@ -576,6 +565,7 @@ pub fn render_chart_raw(
     // Convert grid to braille characters
     let mut braille_chars: Vec<Vec<char>> = vec![vec![' '; chart_cols]; braille_rows];
 
+    #[allow(clippy::needless_range_loop)]
     for br in 0..braille_rows {
         for bc in 0..chart_cols {
             let mut pattern: u8 = 0;
@@ -610,6 +600,7 @@ pub fn render_chart_raw(
         .collect();
 
     // Chart rows
+    #[allow(clippy::needless_range_loop)]
     for br in 0..braille_rows {
         // Y-axis label
         let label = if let Some(label) = y_label_map.get(&br) {

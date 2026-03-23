@@ -289,32 +289,31 @@ th.sort-desc .arrow-down {
 }"#;
 
 fn build_js(_num_cols: usize) -> String {
-    format!(
-        r#"(function() {{
+    r#"(function() {
   const table = document.querySelector('table');
   const thead = table.querySelector('thead');
   const tbody = table.querySelector('tbody');
   const ths = thead.querySelectorAll('th');
-  let sortState = {{}};
+  let sortState = {};
 
-  function getGroups() {{
+  function getGroups() {
     const rows = Array.from(tbody.querySelectorAll('tr'));
     const groups = [];
     let current = null;
-    for (const row of rows) {{
+    for (const row of rows) {
       const firstCell = row.querySelector('td');
       const text = firstCell ? firstCell.textContent : '';
-      if (row.classList.contains('child') || text.startsWith('\u{{2514}}')) {{
+      if (row.classList.contains('child') || text.startsWith('\u{2514}')) {
         if (current) current.children.push(row);
-      }} else {{
-        current = {{ parent: row, children: [] }};
+      } else {
+        current = { parent: row, children: [] };
         groups.push(current);
-      }}
-    }}
+      }
+    }
     return groups;
-  }}
+  }
 
-  function parseValue(text) {{
+  function parseValue(text) {
     const cleaned = text.replace(/\(.*?\)/g, '').trim();
     const match = cleaned.match(/^[\$]?([\d,.]+)\s*([KMGB])?$/i);
     if (!match) return 0;
@@ -325,18 +324,18 @@ fn build_js(_num_cols: usize) -> String {
     else if (suffix === 'G') num *= 1e9;
     else if (suffix === 'B') num *= 1e9;
     return num;
-  }}
+  }
 
-  function getCellValue(row, col) {{
+  function getCellValue(row, col) {
     const cells = row.querySelectorAll('td');
     if (col >= cells.length) return '';
     return cells[col].textContent || '';
-  }}
+  }
 
-  const originalGroups = getGroups().map((g, i) => ({{ ...g, index: i }}));
+  const originalGroups = getGroups().map((g, i) => ({ ...g, index: i }));
 
-  ths.forEach((th, colIdx) => {{
-    th.addEventListener('click', () => {{
+  ths.forEach((th, colIdx) => {
+    th.addEventListener('click', () => {
       const prev = sortState[colIdx] || 'none';
       let next;
       if (prev === 'none') next = 'asc';
@@ -344,20 +343,20 @@ fn build_js(_num_cols: usize) -> String {
       else next = 'none';
 
       // Clear all sort classes
-      ths.forEach(t => {{
+      ths.forEach(t => {
         t.classList.remove('sort-asc', 'sort-desc');
-      }});
-      sortState = {{}};
+      });
+      sortState = {};
 
-      if (next !== 'none') {{
+      if (next !== 'none') {
         sortState[colIdx] = next;
         th.classList.add('sort-' + next);
-      }}
+      }
 
-      let groups = originalGroups.map(g => ({{ ...g }}));
+      let groups = originalGroups.map(g => ({ ...g }));
 
-      if (next !== 'none') {{
-        groups.sort((a, b) => {{
+      if (next !== 'none') {
+        groups.sort((a, b) => {
           const aText = getCellValue(a.parent, colIdx);
           const bText = getCellValue(b.parent, colIdx);
           const aNum = parseValue(aText);
@@ -366,27 +365,27 @@ fn build_js(_num_cols: usize) -> String {
           const bIsNum = bNum !== 0 || /^\$?0/.test(bText.trim());
 
           let cmp;
-          if (aIsNum && bIsNum) {{
+          if (aIsNum && bIsNum) {
             cmp = aNum - bNum;
-          }} else {{
+          } else {
             cmp = aText.localeCompare(bText);
-          }}
+          }
           return next === 'desc' ? -cmp : cmp;
-        }});
-      }}
+        });
+      }
 
       // Rebuild tbody
       while (tbody.firstChild) tbody.removeChild(tbody.firstChild);
-      for (const g of groups) {{
+      for (const g of groups) {
         tbody.appendChild(g.parent);
-        for (const child of g.children) {{
+        for (const child of g.children) {
           tbody.appendChild(child);
-        }}
-      }}
-    }});
-  }});
-}})();"#,
-    )
+        }
+      }
+    });
+  });
+})();"#
+        .to_string()
 }
 
 #[cfg(test)]

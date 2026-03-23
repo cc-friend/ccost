@@ -100,19 +100,22 @@ pub enum GroupDimension {
     Model,
 }
 
-impl GroupDimension {
-    pub fn from_str(s: &str) -> Option<Self> {
+impl std::str::FromStr for GroupDimension {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "day" => Some(Self::Day),
-            "hour" => Some(Self::Hour),
-            "month" => Some(Self::Month),
-            "session" => Some(Self::Session),
-            "project" => Some(Self::Project),
-            "model" => Some(Self::Model),
-            _ => None,
+            "day" => Ok(Self::Day),
+            "hour" => Ok(Self::Hour),
+            "month" => Ok(Self::Month),
+            "session" => Ok(Self::Session),
+            "project" => Ok(Self::Project),
+            "model" => Ok(Self::Model),
+            _ => Err(format!("invalid group dimension: '{}'", s)),
         }
     }
+}
 
+impl GroupDimension {
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Day => "day",
@@ -152,12 +155,13 @@ pub enum SortOrder {
     Desc,
 }
 
-impl SortOrder {
-    pub fn from_str(s: &str) -> Option<Self> {
+impl std::str::FromStr for SortOrder {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "asc" => Some(Self::Asc),
-            "desc" => Some(Self::Desc),
-            _ => None,
+            "asc" => Ok(Self::Asc),
+            "desc" => Ok(Self::Desc),
+            _ => Err(format!("invalid sort order: '{}'", s)),
         }
     }
 }

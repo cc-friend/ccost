@@ -816,6 +816,19 @@ fn test_sl_cost_diff_json() {
     assert!(parsed["totals"].is_object(), "should have totals object");
 }
 
+/// 27b. --cost-diff with non-session --per should fail.
+#[test]
+fn test_cost_diff_requires_per_session() {
+    let f = create_test_file();
+    let path = f.path().to_str().unwrap();
+
+    sl_cmd()
+        .args(["sl", "--file", path, "--cost-diff", "--per", "day"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("--cost-diff requires --per session"));
+}
+
 /// 27. --per action TOTAL with the standard test fixture.
 #[test]
 fn test_sl_action_cost_total() {

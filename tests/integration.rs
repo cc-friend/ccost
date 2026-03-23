@@ -2255,8 +2255,8 @@ fn test_group_by_hour() {
     let grouped = group_records(&priced, &dims, Some(&group_opts));
 
     assert_eq!(grouped.data.len(), 2, "should group into 2 hours");
-    assert_eq!(grouped.data[0].label, "2026-03-23 10:00");
-    assert_eq!(grouped.data[1].label, "2026-03-23 11:00");
+    assert_eq!(grouped.data[0].label, "2026-03-23T10:00");
+    assert_eq!(grouped.data[1].label, "2026-03-23T11:00");
     // First hour should have 2 records aggregated
     assert_eq!(grouped.data[0].input_tokens, 300);
 }

@@ -633,6 +633,71 @@ fn test_ratelimit_empty_input() {
     assert_eq!(entries.len(), 0);
 }
 
+#[test]
+fn test_action_cost_not_lost_on_constant_pct() {
+    // Two sessions where pct never changes — cost should not be lost at EOF.
+    // Session s1: cost 0.0 -> 1.0 -> 2.0 at constant (10%, 5%)
+    // Session s2: cost 0.0 -> 0.5 -> 1.0 at constant (10%, 5%)
+    // Only the first record of each session is emitted (pair dedup).
+    // Without the EOF flush fix, total action cost = $0.00 (all deltas lost).
+    // With fix, total action cost = $3.00 ($2.00 from s1 + $1.00 from s2).
+    let resets_5h: i64 = 1774497600;
+    let resets_7d: i64 = 1774605600;
+
+    let records = vec![
+        // Session s1: 3 records, all at (10%, 5%)
+        make_record(
+            1000, "s1", "/proj/a", 0.0, 500, 200, 5, 2, None,
+            Some(10), Some(resets_5h), Some(5), Some(resets_7d),
+        ),
+        make_record(
+            2000, "s1", "/proj/a", 1.0, 1000, 400, 10, 4, None,
+            Some(10), Some(resets_5h), Some(5), Some(resets_7d),
+        ),
+        make_record(
+            3000, "s1", "/proj/a", 2.0, 1500, 600, 15, 6, None,
+            Some(10), Some(resets_5h), Some(5), Some(resets_7d),
+        ),
+        // Session s2: 3 records, all at (10%, 5%)
+        make_record(
+            4000, "s2", "/proj/b", 0.0, 500, 200, 5, 2, None,
+            Some(10), Some(resets_5h), Some(5), Some(resets_7d),
+        ),
+        make_record(
+            5000, "s2", "/proj/b", 0.5, 1000, 400, 10, 4, None,
+            Some(10), Some(resets_5h), Some(5), Some(resets_7d),
+        ),
+        make_record(
+            6000, "s2", "/proj/b", 1.0, 1500, 600, 15, 6, None,
+            Some(10), Some(resets_5h), Some(5), Some(resets_7d),
+        ),
+    ];
+
+    let entries = aggregate_ratelimit(&records);
+    // Only two entries emitted (first of each session, since pct never changes)
+    // But each should capture remaining cost via EOF flush.
+    let total_cost: f64 = entries.iter().map(|e| e.cost_delta).sum();
+    assert!(
+        (total_cost - 3.0).abs() < 1e-9,
+        "total action cost should be $3.00 (s1=$2.00 + s2=$1.00), got ${:.2}",
+        total_cost
+    );
+
+    // Verify per-session: s1 should have $2.00, s2 should have $1.00
+    let s1_cost: f64 = entries.iter().filter(|e| e.session_id == "s1").map(|e| e.cost_delta).sum();
+    let s2_cost: f64 = entries.iter().filter(|e| e.session_id == "s2").map(|e| e.cost_delta).sum();
+    assert!(
+        (s1_cost - 2.0).abs() < 1e-9,
+        "s1 cost should be $2.00, got ${:.2}",
+        s1_cost
+    );
+    assert!(
+        (s2_cost - 1.0).abs() < 1e-9,
+        "s2 cost should be $1.00, got ${:.2}",
+        s2_cost
+    );
+}
+
 // ─── aggregate_windows ────────────────────────────────────────────────────────
 
 #[test]
