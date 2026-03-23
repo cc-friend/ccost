@@ -235,7 +235,7 @@ ccost --copy json
 ccost sl --per 5h --cost decimal
 
 # Statusline: cost comparison
-ccost sl --cost-diff --cost decimal
+ccost sl --per session --cost-diff --cost decimal
 
 # Statusline: rate limit chart
 ccost sl --chart 5h
@@ -247,7 +247,7 @@ ccost is also a Rust library.
 
 ```toml
 [dependencies]
-ccost = { path = "../ccost-rs" }
+ccost = { path = "../ccost" }
 ```
 
 ### Pipeline
@@ -361,7 +361,7 @@ Bundled at compile time from LiteLLM. Use `--live-pricing` for latest or `--pric
 
 The cost reported by `ccost sl` comes from the server and is therefore the official figure. However, it depends on Claude Code's cumulative `total_cost_usd`, which may not always include subagent costs and may also carry over inherited values from continued sessions. As a result, when pricing data are accurate, `ccost` may produce a more accurate cost estimate than `ccost sl`.
 
-Use `ccost sl --cost-diff` to compare the two side by side.
+Use `ccost sl --per session --cost-diff` to compare the two side by side.
 
 ### Project Path Decoding
 

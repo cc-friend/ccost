@@ -3,6 +3,7 @@ use chrono::{DateTime, Duration, Local, TimeZone, Utc};
 use std::collections::{BTreeMap, HashSet};
 
 use super::types::*;
+use crate::utils::parse_fixed_offset;
 
 // ─── Timezone helpers (mirrors parser.rs) ────────────────────────────────────
 
@@ -11,19 +12,6 @@ enum ResolvedTz {
     Utc,
     Fixed(chrono::FixedOffset),
     Iana(chrono_tz::Tz),
-}
-
-fn parse_fixed_offset(s: &str) -> Option<chrono::FixedOffset> {
-    let sign = if s.starts_with('+') { 1 } else { -1 };
-    let rest = &s[1..];
-    let parts: Vec<&str> = rest.split(':').collect();
-    if parts.len() != 2 {
-        return None;
-    }
-    let hours: i32 = parts[0].parse().ok()?;
-    let minutes: i32 = parts[1].parse().ok()?;
-    let total_seconds = sign * (hours * 3600 + minutes * 60);
-    chrono::FixedOffset::east_opt(total_seconds)
 }
 
 fn resolve_tz(tz: Option<&str>) -> ResolvedTz {
@@ -350,6 +338,69 @@ pub fn aggregate_ratelimit(records: &[SlRecord]) -> Vec<SlRateLimitEntry> {
             seven_day_pct: sd_pct,
             seven_day_resets_at: sd_resets,
         });
+    }
+
+    // Flush remaining unaccounted cost at EOF for each session.
+    // When a same-pct run ends at EOF/session boundary, the accumulated
+    // cost delta from skipped records is lost — there's no "next emitted
+    // entry" to capture it. Fix: add remaining delta to each session's
+    // last emitted entry.
+
+    // Build map of last entry index per session (owned keys to avoid borrow conflict).
+    let mut last_entry_idx: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for (i, entry) in result.iter().enumerate() {
+        last_entry_idx.insert(entry.session_id.clone(), i);
+    }
+
+    // Track final cost from qualifying records (ones with all 4 rate-limit fields).
+    let mut final_cost: std::collections::HashMap<&str, f64> = std::collections::HashMap::new();
+    for rec in records {
+        if rec.five_hour_pct.is_some()
+            && rec.five_hour_resets_at.is_some()
+            && rec.seven_day_pct.is_some()
+            && rec.seven_day_resets_at.is_some()
+        {
+            final_cost.insert(rec.session_id.as_str(), rec.cost_usd);
+        }
+    }
+
+    // Track last qualifying record per session (for creating synthetic entries if needed).
+    let mut last_qualifying: std::collections::HashMap<&str, &SlRecord> =
+        std::collections::HashMap::new();
+    for rec in records {
+        if rec.five_hour_pct.is_some()
+            && rec.five_hour_resets_at.is_some()
+            && rec.seven_day_pct.is_some()
+            && rec.seven_day_resets_at.is_some()
+        {
+            last_qualifying.insert(rec.session_id.as_str(), rec);
+        }
+    }
+
+    for (sid, &fc) in &final_cost {
+        let baseline = last_cost_by_session.get(sid).copied().unwrap_or(0.0);
+        let remaining = if fc < baseline {
+            fc // segment reset at end
+        } else {
+            fc - baseline
+        };
+        if remaining > 1e-9 {
+            if let Some(&idx) = last_entry_idx.get(*sid) {
+                result[idx].cost_delta += remaining;
+            } else if let Some(rec) = last_qualifying.get(sid) {
+                // Session had qualifying records but none were emitted (global
+                // last_pair dedup filtered them all). Emit a synthetic entry.
+                result.push(SlRateLimitEntry {
+                    ts: rec.ts,
+                    session_id: rec.session_id.clone(),
+                    cost_delta: remaining,
+                    five_hour_pct: rec.five_hour_pct.unwrap(),
+                    five_hour_resets_at: rec.five_hour_resets_at.unwrap(),
+                    seven_day_pct: rec.seven_day_pct.unwrap(),
+                    seven_day_resets_at: rec.seven_day_resets_at.unwrap(),
+                });
+            }
+        }
     }
 
     result

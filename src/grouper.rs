@@ -6,6 +6,7 @@ use regex::Regex;
 use crate::types::{
     GroupDimension, GroupOptions, GroupResult, GroupedData, PricedTokenRecord, SortOrder,
 };
+use crate::utils::parse_fixed_offset;
 
 static DATE_SUFFIX_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"-\d{8}$").unwrap());
 
@@ -65,7 +66,7 @@ fn get_group_key_resolved(
         GroupDimension::Project => record.project.clone(),
         GroupDimension::Model => shorten_model_name(&record.model),
         GroupDimension::Day => format_timestamp_resolved(record, "%Y-%m-%d", tz),
-        GroupDimension::Hour => format_timestamp_resolved(record, "%Y-%m-%d %H:00", tz),
+        GroupDimension::Hour => format_timestamp_resolved(record, "%Y-%m-%dT%H:00", tz),
         GroupDimension::Month => format_timestamp_resolved(record, "%Y-%m", tz),
     }
 }
@@ -91,26 +92,6 @@ fn format_timestamp_resolved(record: &PricedTokenRecord, fmt: &str, tz: &Resolve
     }
 }
 
-/// Parse a fixed offset string like `"+05:30"` or `"-08:00"` into a `FixedOffset`.
-fn parse_fixed_offset(s: &str) -> Option<chrono::FixedOffset> {
-    if s.len() < 5 {
-        return None;
-    }
-    let sign = match s.as_bytes()[0] {
-        b'+' => 1,
-        b'-' => -1,
-        _ => return None,
-    };
-    let rest = &s[1..];
-    let parts: Vec<&str> = rest.split(':').collect();
-    if parts.len() != 2 {
-        return None;
-    }
-    let hours: i32 = parts[0].parse().ok()?;
-    let minutes: i32 = parts[1].parse().ok()?;
-    let total_seconds = sign * (hours * 3600 + minutes * 60);
-    chrono::FixedOffset::east_opt(total_seconds)
-}
 
 /// Aggregate numeric fields from a slice of priced token records into a `GroupedData`.
 fn aggregate(label: &str, records: &[&PricedTokenRecord]) -> GroupedData {
@@ -260,5 +241,109 @@ fn sort_grouped_data(data: &mut [GroupedData], order: SortOrder) {
     match order {
         SortOrder::Asc => data.sort_by(|a, b| a.label.cmp(&b.label)),
         SortOrder::Desc => data.sort_by(|a, b| b.label.cmp(&a.label)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::{TimeZone, Utc};
+
+    fn mock_record(date: &str, model: &str, session: &str, project: &str) -> PricedTokenRecord {
+        let ts = Utc.with_ymd_and_hms(
+            date[..4].parse().unwrap(),
+            date[5..7].parse().unwrap(),
+            date[8..10].parse().unwrap(),
+            12, 0, 0,
+        ).unwrap();
+        PricedTokenRecord {
+            timestamp: ts,
+            model: model.to_string(),
+            session_id: session.to_string(),
+            project: project.to_string(),
+            input_tokens: 100, output_tokens: 50,
+            cache_creation_tokens: 0, cache_read_tokens: 0,
+            input_cost: 0.01, cache_creation_cost: 0.0,
+            cache_read_cost: 0.0, output_cost: 0.02, total_cost: 0.03,
+        }
+    }
+
+    #[test]
+    fn test_shorten_model_name_strips_claude_and_date() {
+        assert_eq!(shorten_model_name("claude-3-5-sonnet-20241022"), "3-5-sonnet");
+    }
+
+    #[test]
+    fn test_shorten_model_name_no_prefix() {
+        assert_eq!(shorten_model_name("gpt-4"), "gpt-4");
+    }
+
+    #[test]
+    fn test_shorten_model_name_claude_no_date() {
+        assert_eq!(shorten_model_name("claude-opus"), "opus");
+    }
+
+    #[test]
+    fn test_get_group_key_session() {
+        let rec = mock_record("2026-03-15", "model", "sess-abc", "proj");
+        assert_eq!(get_group_key(&rec, GroupDimension::Session, None), "sess-abc");
+    }
+
+    #[test]
+    fn test_get_group_key_project() {
+        let rec = mock_record("2026-03-15", "model", "s1", "my-project");
+        assert_eq!(get_group_key(&rec, GroupDimension::Project, None), "my-project");
+    }
+
+    #[test]
+    fn test_get_group_key_model_shortens() {
+        let rec = mock_record("2026-03-15", "claude-3-5-sonnet-20241022", "s1", "proj");
+        assert_eq!(get_group_key(&rec, GroupDimension::Model, None), "3-5-sonnet");
+    }
+
+    #[test]
+    fn test_get_group_key_day_utc() {
+        let rec = mock_record("2026-03-15", "model", "s1", "proj");
+        let key = get_group_key(&rec, GroupDimension::Day, Some("UTC"));
+        assert_eq!(key, "2026-03-15");
+    }
+
+    #[test]
+    fn test_get_group_key_hour_utc_uses_t() {
+        let rec = mock_record("2026-03-15", "model", "s1", "proj");
+        let key = get_group_key(&rec, GroupDimension::Hour, Some("UTC"));
+        assert!(key.contains("T"), "Hour key '{}' should contain T separator", key);
+        assert!(key.ends_with(":00"), "Hour key '{}' should end with :00", key);
+    }
+
+    #[test]
+    fn test_get_group_key_month_utc() {
+        let rec = mock_record("2026-03-15", "model", "s1", "proj");
+        let key = get_group_key(&rec, GroupDimension::Month, Some("UTC"));
+        assert_eq!(key, "2026-03");
+    }
+
+    #[test]
+    fn test_resolve_tz_utc() {
+        let tz = resolve_tz(Some("UTC"));
+        assert!(matches!(tz, ResolvedTz::Utc));
+    }
+
+    #[test]
+    fn test_resolve_tz_fixed() {
+        let tz = resolve_tz(Some("+05:30"));
+        assert!(matches!(tz, ResolvedTz::Fixed(_)));
+    }
+
+    #[test]
+    fn test_resolve_tz_iana() {
+        let tz = resolve_tz(Some("America/New_York"));
+        assert!(matches!(tz, ResolvedTz::Iana(_)));
+    }
+
+    #[test]
+    fn test_resolve_tz_none_is_local() {
+        let tz = resolve_tz(None);
+        assert!(matches!(tz, ResolvedTz::Local));
     }
 }

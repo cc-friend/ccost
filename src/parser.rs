@@ -7,6 +7,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::types::{DedupStats, LoadOptions, LoadResult, RecordsMeta, TokenRecord};
+use crate::utils::parse_fixed_offset;
 
 /// Try to parse a single JSON value as a DateTime<Utc>.
 /// - String: parse as ISO 8601
@@ -216,20 +217,6 @@ pub fn format_date_in_tz(date: &DateTime<Utc>, tz: Option<&str>) -> String {
     }
 }
 
-/// Parse a "+HH:MM" or "-HH:MM" string into a FixedOffset.
-fn parse_fixed_offset(s: &str) -> Option<chrono::FixedOffset> {
-    let sign = if s.starts_with('+') { 1 } else { -1 };
-    let rest = &s[1..];
-    let parts: Vec<&str> = rest.split(':').collect();
-    if parts.len() != 2 {
-        return None;
-    }
-    let hours: i32 = parts[0].parse().ok()?;
-    let minutes: i32 = parts[1].parse().ok()?;
-    let total_seconds = sign * (hours * 3600 + minutes * 60);
-    chrono::FixedOffset::east_opt(total_seconds)
-}
-
 /// Pre-resolved timezone for efficient repeated formatting in hot loops.
 enum ResolvedTz {
     Local,
@@ -357,30 +344,24 @@ fn parse_ts_val(val: &TimestampVal) -> Option<DateTime<Utc>> {
 
 fn extract_timestamp_raw(rec: &RawRecord) -> Option<DateTime<Utc>> {
     // Top-level: timestamp, createdAt, updatedAt
-    for field in [&rec.timestamp, &rec.created_at, &rec.updated_at] {
-        if let Some(val) = field {
+    for val in [&rec.timestamp, &rec.created_at, &rec.updated_at].into_iter().flatten() {
+        if let Some(dt) = parse_ts_val(val) {
+            return Some(dt);
+        }
+    }
+    // message: timestamp, createdAt
+    if let Some(ref msg) = rec.message {
+        for val in [&msg.timestamp, &msg.created_at].into_iter().flatten() {
             if let Some(dt) = parse_ts_val(val) {
                 return Some(dt);
             }
         }
     }
-    // message: timestamp, createdAt
-    if let Some(ref msg) = rec.message {
-        for field in [&msg.timestamp, &msg.created_at] {
-            if let Some(val) = field {
-                if let Some(dt) = parse_ts_val(val) {
-                    return Some(dt);
-                }
-            }
-        }
-    }
     // snapshot: timestamp, createdAt
     if let Some(ref snap) = rec.snapshot {
-        for field in [&snap.timestamp, &snap.created_at] {
-            if let Some(val) = field {
-                if let Some(dt) = parse_ts_val(val) {
-                    return Some(dt);
-                }
+        for val in [&snap.timestamp, &snap.created_at].into_iter().flatten() {
+            if let Some(dt) = parse_ts_val(val) {
+                return Some(dt);
             }
         }
     }
@@ -535,7 +516,7 @@ pub fn load_records(options: &LoadOptions) -> LoadResult {
             let content = fs::read_to_string(file_path).ok()?;
             let file_mtime = fs::metadata(file_path)
                 .and_then(|m| m.modified())
-                .map(|t| DateTime::<Utc>::from(t))
+                .map(DateTime::<Utc>::from)
                 .unwrap_or_else(|_| Utc::now());
 
             let mut records = Vec::new();

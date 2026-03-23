@@ -17,7 +17,7 @@ sl pipeline: `load_sl_records → filter → aggregate (segment-aware) → forma
 `src/` is split into pure library (`lib.rs`, `types.rs`, `parser.rs`, `pricing.rs`, `grouper.rs`, `formatters/`) and CLI (`main.rs`).
 
 - `src/sl/` — statusline analysis module: `types.rs`, `parser.rs`, `aggregator.rs`, `formatter.rs`
-- `src/utils.rs` — shared utilities (clipboard, date parsing, terminal width)
+- `src/utils.rs` — shared utilities (clipboard, date parsing, terminal width, `parse_fixed_offset`)
 
 ## Key design decisions
 
@@ -29,6 +29,12 @@ sl pipeline: `load_sl_records → filter → aggregate (segment-aware) → forma
 
 **Timezone handling:** Uses `chrono` + `chrono-tz` for IANA timezone support, `chrono::FixedOffset` for +HH:MM offsets, `chrono::Local` for system timezone.
 
+**`--cost-diff` requires `--per session`.** Hard error if used with other views.
+
+**Cost-diff totals are like-for-like:** Only matched sessions (those with both SL and LiteLLM costs) are included in totals. Prefix matching uses deterministic longest-match selection.
+
+**sl action view EOF flushing:** `aggregate_ratelimit` skips consecutive records with same (5h%, 7d%) pair. After the main loop, remaining unaccounted cost deltas are flushed to each session's last emitted entry to avoid cost loss.
+
 **sl segment-aware aggregation:** statusline.jsonl has cumulative counters (cost, duration, tokens, lines) that reset to 0 on session resume. Detect resets by comparing consecutive records; sum max-per-segment across segments. For continued sessions (`claude --continue`), cumulative counters carry over from the predecessor without resetting; `aggregate_sessions` subtracts the first record's values as baseline to exclude inherited costs. Window aggregation (`segment_totals_before`) returns the session baseline (not zeros) when no records exist before a time point, ensuring delta computation correctly handles continued sessions.
 
 **sl unified table columns:** All `--per` views (session/project/day/1h/5h/1w) share the same column set: `[Label] | Cost | Duration | API Time | Lines +/- | Sess | 5h% | 1w%`. `--per 1h`/`--per 5h` add `Est 5h Budg` (= cost × 100 / Δ5h%); `--per 1w` adds `Est 1w Budg`. `--per 1h` also adds `5h Resets`. `--per action` includes `Cost` (delta). `5h%` and `1w%` show min–max ranges. Compact mode: `[Label] | Cost | Duration | Sess | 5h%`.
@@ -38,6 +44,10 @@ sl pipeline: `load_sl_records → filter → aggregate (segment-aware) → forma
 **sl JSON field naming:** `SlWindowSummary` has separate `est_5h_budget` and `est_1w_budget` fields (serialized as `est5hBudget`/`est1wBudget`). For 1h/5h views, `est_5h_budget` is populated; for 1w views, `est_1w_budget` is populated. The other is `null`.
 
 **`--table auto` behavior:** When writing to file (`--output`/`--filename`), auto selects full table. When printing to terminal, auto selects compact if width < 120.
+
+**Hour key format:** Grouper emits `%Y-%m-%dT%H:00` (ISO 8601 T separator) so chart `auto_granularity_from_labels` correctly detects hour labels.
+
+**Types:** `GroupDimension` and `SortOrder` implement `std::str::FromStr`. CLI supports `-h`/`-V` short flags in addition to `--help`/`--version`.
 
 ## Commands
 
@@ -54,3 +64,4 @@ cargo run -- sl --help      # show sl subcommand help
 - **Tests** — add or update tests to cover the change
 - **README.md** — update documentation, CLI reference, examples
 - **CLAUDE.md** — update this file if architecture, design decisions, or conventions change
+- **clippy** — `cargo clippy -- -W clippy::all` must produce zero warnings

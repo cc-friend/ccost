@@ -6,6 +6,7 @@ use serde_json;
 use super::types::*;
 use crate::formatters::table::format_cost;
 use crate::types::PriceMode;
+use crate::utils::parse_fixed_offset;
 
 // ─── Public option structs ────────────────────────────────────────────────────
 
@@ -33,19 +34,6 @@ enum ResolvedTz {
     Utc,
     Fixed(chrono::FixedOffset),
     Iana(chrono_tz::Tz),
-}
-
-fn parse_fixed_offset(s: &str) -> Option<chrono::FixedOffset> {
-    let sign = if s.starts_with('+') { 1 } else { -1 };
-    let rest = &s[1..];
-    let parts: Vec<&str> = rest.split(':').collect();
-    if parts.len() != 2 {
-        return None;
-    }
-    let hours: i32 = parts[0].parse().ok()?;
-    let minutes: i32 = parts[1].parse().ok()?;
-    let total_seconds = sign * (hours * 3600 + minutes * 60);
-    chrono::FixedOffset::east_opt(total_seconds)
 }
 
 fn resolve_tz(tz: Option<&str>) -> ResolvedTz {
@@ -410,45 +398,39 @@ fn fmt_lines(added: u64, removed: u64, color: bool) -> String {
     format!("{} {}", add_str, rem_str)
 }
 
-/// Build a unified row for any sl --per view.
-fn build_unified_row(
+struct UnifiedRowData {
     label: String,
     cost: f64,
     duration_ms: u64,
     api_duration_ms: u64,
     lines_added: u64,
     lines_removed: u64,
-    count: u32,
-    min_5h: Option<u8>,
-    max_5h: Option<u8>,
-    min_7d: Option<u8>,
-    max_7d: Option<u8>,
-    price_mode: PriceMode,
-    compact: bool,
-    extra: Option<String>,
-    color: bool,
-) -> Vec<String> {
-    let cost_str = format_cost(cost, price_mode);
-    let duration_str = fmt_duration(duration_ms);
+    sessions: u32,
+    min_five_hour_pct: Option<u8>,
+    max_five_hour_pct: Option<u8>,
+    min_seven_day_pct: Option<u8>,
+    max_seven_day_pct: Option<u8>,
+}
 
-    let mut row = vec![label, cost_str, duration_str];
+/// Build a unified row for any sl --per view.
+fn build_unified_row(data: &UnifiedRowData, opts: &SlFormatOptions) -> Vec<String> {
+    let cost_str = format_cost(data.cost, opts.price_mode);
+    let duration_str = fmt_duration(data.duration_ms);
 
-    if compact {
-        row.push(count.to_string());
-        row.push(fmt_pct_range(min_5h, max_5h));
+    let mut row = vec![data.label.clone(), cost_str, duration_str];
+
+    if opts.compact {
+        row.push(data.sessions.to_string());
+        row.push(fmt_pct_range(data.min_five_hour_pct, data.max_five_hour_pct));
     } else {
-        let api_time_str = fmt_duration(api_duration_ms);
-        let lines_str = fmt_lines(lines_added, lines_removed, color);
+        let api_time_str = fmt_duration(data.api_duration_ms);
+        let lines_str = fmt_lines(data.lines_added, data.lines_removed, opts.color);
 
         row.push(api_time_str);
         row.push(lines_str);
-        row.push(count.to_string());
-        row.push(fmt_pct_range(min_5h, max_5h));
-        row.push(fmt_pct_range(min_7d, max_7d));
-    }
-
-    if let Some(extra_val) = extra {
-        row.push(extra_val);
+        row.push(data.sessions.to_string());
+        row.push(fmt_pct_range(data.min_five_hour_pct, data.max_five_hour_pct));
+        row.push(fmt_pct_range(data.min_seven_day_pct, data.max_seven_day_pct));
     }
 
     row
@@ -470,21 +452,20 @@ pub fn format_sl_session_table(sessions: &[SlSessionSummary], opts: &SlFormatOpt
             };
 
             build_unified_row(
-                sess_short,
-                s.total_cost,
-                s.total_duration_ms,
-                s.total_api_duration_ms,
-                s.total_lines_added,
-                s.total_lines_removed,
-                s.segments,
-                s.min_five_hour_pct,
-                s.max_five_hour_pct,
-                s.min_seven_day_pct,
-                s.max_seven_day_pct,
-                opts.price_mode,
-                opts.compact,
-                None,
-                opts.color,
+                &UnifiedRowData {
+                    label: sess_short,
+                    cost: s.total_cost,
+                    duration_ms: s.total_duration_ms,
+                    api_duration_ms: s.total_api_duration_ms,
+                    lines_added: s.total_lines_added,
+                    lines_removed: s.total_lines_removed,
+                    sessions: s.segments,
+                    min_five_hour_pct: s.min_five_hour_pct,
+                    max_five_hour_pct: s.max_five_hour_pct,
+                    min_seven_day_pct: s.min_seven_day_pct,
+                    max_seven_day_pct: s.max_seven_day_pct,
+                },
+                opts,
             )
         })
         .collect();
@@ -500,21 +481,20 @@ pub fn format_sl_session_table(sessions: &[SlSessionSummary], opts: &SlFormatOpt
     let min_7d = sessions.iter().filter_map(|s| s.min_seven_day_pct).min();
     let max_7d = sessions.iter().filter_map(|s| s.max_seven_day_pct).max();
     let totals = build_unified_row(
-        "TOTAL".to_string(),
-        total_cost,
-        total_dur,
-        total_api,
-        total_added,
-        total_removed,
-        total_segs,
-        min_5h,
-        max_5h,
-        min_7d,
-        max_7d,
-        opts.price_mode,
-        opts.compact,
-        None,
-        opts.color,
+        &UnifiedRowData {
+            label: "TOTAL".to_string(),
+            cost: total_cost,
+            duration_ms: total_dur,
+            api_duration_ms: total_api,
+            lines_added: total_added,
+            lines_removed: total_removed,
+            sessions: total_segs,
+            min_five_hour_pct: min_5h,
+            max_five_hour_pct: max_5h,
+            min_seven_day_pct: min_7d,
+            max_seven_day_pct: max_7d,
+        },
+        opts,
     );
 
     render_table_with_totals(&headers, &rows, Some(&totals), opts.color)
@@ -530,21 +510,20 @@ pub fn format_sl_project_table(projects: &[SlProjectSummary], opts: &SlFormatOpt
         .iter()
         .map(|p| {
             build_unified_row(
-                p.project.clone(),
-                p.total_cost,
-                p.total_duration_ms,
-                p.total_api_duration_ms,
-                p.total_lines_added,
-                p.total_lines_removed,
-                p.session_count,
-                p.min_five_hour_pct,
-                p.max_five_hour_pct,
-                p.min_seven_day_pct,
-                p.max_seven_day_pct,
-                opts.price_mode,
-                opts.compact,
-                None,
-                opts.color,
+                &UnifiedRowData {
+                    label: p.project.clone(),
+                    cost: p.total_cost,
+                    duration_ms: p.total_duration_ms,
+                    api_duration_ms: p.total_api_duration_ms,
+                    lines_added: p.total_lines_added,
+                    lines_removed: p.total_lines_removed,
+                    sessions: p.session_count,
+                    min_five_hour_pct: p.min_five_hour_pct,
+                    max_five_hour_pct: p.max_five_hour_pct,
+                    min_seven_day_pct: p.min_seven_day_pct,
+                    max_seven_day_pct: p.max_seven_day_pct,
+                },
+                opts,
             )
         })
         .collect();
@@ -560,21 +539,20 @@ pub fn format_sl_project_table(projects: &[SlProjectSummary], opts: &SlFormatOpt
     let min_7d = projects.iter().filter_map(|p| p.min_seven_day_pct).min();
     let max_7d = projects.iter().filter_map(|p| p.max_seven_day_pct).max();
     let totals = build_unified_row(
-        "TOTAL".to_string(),
-        total_cost,
-        total_dur,
-        total_api,
-        total_added,
-        total_removed,
-        total_sess,
-        min_5h,
-        max_5h,
-        min_7d,
-        max_7d,
-        opts.price_mode,
-        opts.compact,
-        None,
-        opts.color,
+        &UnifiedRowData {
+            label: "TOTAL".to_string(),
+            cost: total_cost,
+            duration_ms: total_dur,
+            api_duration_ms: total_api,
+            lines_added: total_added,
+            lines_removed: total_removed,
+            sessions: total_sess,
+            min_five_hour_pct: min_5h,
+            max_five_hour_pct: max_5h,
+            min_seven_day_pct: min_7d,
+            max_seven_day_pct: max_7d,
+        },
+        opts,
     );
 
     render_table_with_totals(&headers, &rows, Some(&totals), opts.color)
@@ -590,21 +568,20 @@ pub fn format_sl_day_table(days: &[SlDaySummary], opts: &SlFormatOptions) -> Str
         .iter()
         .map(|d| {
             build_unified_row(
-                d.date.clone(),
-                d.total_cost,
-                d.total_duration_ms,
-                d.total_api_duration_ms,
-                d.total_lines_added,
-                d.total_lines_removed,
-                d.session_count,
-                d.min_five_hour_pct,
-                d.max_five_hour_pct,
-                d.min_seven_day_pct,
-                d.max_seven_day_pct,
-                opts.price_mode,
-                opts.compact,
-                None,
-                opts.color,
+                &UnifiedRowData {
+                    label: d.date.clone(),
+                    cost: d.total_cost,
+                    duration_ms: d.total_duration_ms,
+                    api_duration_ms: d.total_api_duration_ms,
+                    lines_added: d.total_lines_added,
+                    lines_removed: d.total_lines_removed,
+                    sessions: d.session_count,
+                    min_five_hour_pct: d.min_five_hour_pct,
+                    max_five_hour_pct: d.max_five_hour_pct,
+                    min_seven_day_pct: d.min_seven_day_pct,
+                    max_seven_day_pct: d.max_seven_day_pct,
+                },
+                opts,
             )
         })
         .collect();
@@ -619,21 +596,20 @@ pub fn format_sl_day_table(days: &[SlDaySummary], opts: &SlFormatOptions) -> Str
     let min_7d = days.iter().filter_map(|d| d.min_seven_day_pct).min();
     let max_7d = days.iter().filter_map(|d| d.max_seven_day_pct).max();
     let mut totals = build_unified_row(
-        "TOTAL".to_string(),
-        total_cost,
-        total_dur,
-        total_api,
-        total_added,
-        total_removed,
-        0,
-        min_5h,
-        max_5h,
-        min_7d,
-        max_7d,
-        opts.price_mode,
-        opts.compact,
-        None,
-        opts.color,
+        &UnifiedRowData {
+            label: "TOTAL".to_string(),
+            cost: total_cost,
+            duration_ms: total_dur,
+            api_duration_ms: total_api,
+            lines_added: total_added,
+            lines_removed: total_removed,
+            sessions: 0,
+            min_five_hour_pct: min_5h,
+            max_five_hour_pct: max_5h,
+            min_seven_day_pct: min_7d,
+            max_seven_day_pct: max_7d,
+        },
+        opts,
     );
     // Replace Sess count with "—" (sessions may span days)
     let sess_idx = if opts.compact { 3 } else { 5 };
@@ -676,37 +652,34 @@ pub fn format_sl_window_table(
                 None => "\u{2014}".to_string(),
             };
 
-            // For 1h: extra = 5h Resets, then append Est Budget
-            // For others: extra = Est Budget
-            let (extra, trailing) = if is_1h && !opts.compact {
+            let mut row = build_unified_row(
+                &UnifiedRowData {
+                    label: window_str,
+                    cost: w.total_cost,
+                    duration_ms: w.total_duration_ms,
+                    api_duration_ms: w.total_api_duration_ms,
+                    lines_added: w.total_lines_added,
+                    lines_removed: w.total_lines_removed,
+                    sessions: w.sessions,
+                    min_five_hour_pct: Some(w.min_five_hour_pct),
+                    max_five_hour_pct: Some(w.max_five_hour_pct),
+                    min_seven_day_pct: w.min_seven_day_pct,
+                    max_seven_day_pct: w.max_seven_day_pct,
+                },
+                opts,
+            );
+
+            // For 1h: append 5h Resets, then Est Budget
+            // For others: append Est Budget
+            if is_1h && !opts.compact {
                 let resets_str = match &w.five_hour_resets_at {
                     Some(r) => fmt_time_short(r, tz),
                     None => "\u{2014}".to_string(),
                 };
-                (Some(resets_str), Some(est_budget_str))
+                row.push(resets_str);
+                row.push(est_budget_str);
             } else {
-                (Some(est_budget_str), None)
-            };
-
-            let mut row = build_unified_row(
-                window_str,
-                w.total_cost,
-                w.total_duration_ms,
-                w.total_api_duration_ms,
-                w.total_lines_added,
-                w.total_lines_removed,
-                w.sessions,
-                Some(w.min_five_hour_pct),
-                Some(w.max_five_hour_pct),
-                w.min_seven_day_pct,
-                w.max_seven_day_pct,
-                opts.price_mode,
-                opts.compact,
-                extra,
-                opts.color,
-            );
-            if let Some(t) = trailing {
-                row.push(t);
+                row.push(est_budget_str);
             }
             row
         })
@@ -721,30 +694,28 @@ pub fn format_sl_window_table(
     let max_5h = windows.iter().map(|w| w.max_five_hour_pct).max();
     let min_7d = windows.iter().filter_map(|w| w.min_seven_day_pct).min();
     let max_7d = windows.iter().filter_map(|w| w.max_seven_day_pct).max();
-    // For 1h: extra = 5h Resets placeholder, then append Est Budget placeholder
-    let extra_totals = if is_1h && !opts.compact {
-        Some(String::new()) // 5h Resets placeholder
-    } else {
-        Some("\u{2014}".to_string()) // Est Budget N/A
-    };
     let mut totals = build_unified_row(
-        "TOTAL".to_string(),
-        total_cost,
-        total_dur,
-        total_api,
-        total_added,
-        total_removed,
-        0,
-        min_5h,
-        max_5h,
-        min_7d,
-        max_7d,
-        opts.price_mode,
-        opts.compact,
-        extra_totals,
-        opts.color,
+        &UnifiedRowData {
+            label: "TOTAL".to_string(),
+            cost: total_cost,
+            duration_ms: total_dur,
+            api_duration_ms: total_api,
+            lines_added: total_added,
+            lines_removed: total_removed,
+            sessions: 0,
+            min_five_hour_pct: min_5h,
+            max_five_hour_pct: max_5h,
+            min_seven_day_pct: min_7d,
+            max_seven_day_pct: max_7d,
+        },
+        opts,
     );
+    // For 1h: append 5h Resets placeholder, then Est Budget N/A
+    // For others: append Est Budget N/A
     if is_1h && !opts.compact {
+        totals.push(String::new()); // 5h Resets placeholder
+        totals.push("\u{2014}".to_string()); // Est Budget N/A
+    } else {
         totals.push("\u{2014}".to_string()); // Est Budget N/A
     }
     // Replace Sess count with "—" (sessions may span windows)
@@ -813,9 +784,11 @@ pub fn format_sl_cost_diff_table(
         })
         .collect();
 
-    let total_sl: f64 = diffs.iter().map(|d| d.sl_cost).sum();
-    let total_litellm: f64 = diffs.iter().filter_map(|d| d.litellm_cost).sum();
-    let has_litellm = diffs.iter().any(|d| d.litellm_cost.is_some());
+    let matched: Vec<&SlCostDiff> = diffs.iter().filter(|d| d.litellm_cost.is_some()).collect();
+    let unmatched_count = diffs.len() - matched.len();
+    let total_sl: f64 = matched.iter().map(|d| d.sl_cost).sum();
+    let total_litellm: f64 = matched.iter().filter_map(|d| d.litellm_cost).sum();
+    let has_litellm = !matched.is_empty();
     let total_diff = if has_litellm {
         Some(total_sl - total_litellm)
     } else {
@@ -846,7 +819,14 @@ pub fn format_sl_cost_diff_table(
         },
     ];
 
-    render_table_with_totals(&headers, &rows, Some(&totals), opts.color)
+    let mut table = render_table_with_totals(&headers, &rows, Some(&totals), opts.color);
+    if unmatched_count > 0 {
+        table.push_str(&format!(
+            "\n  * Totals exclude {} unmatched session(s)\n",
+            unmatched_count
+        ));
+    }
+    table
 }
 
 // ─── JSON formatters ──────────────────────────────────────────────────────────
@@ -926,14 +906,17 @@ pub fn format_sl_json_days(days: &[SlDaySummary], meta: &SlJsonMeta) -> String {
 
 /// Format cost-diff data as JSON with meta/data structure.
 pub fn format_sl_json_cost_diff(diffs: &[SlCostDiff], meta: &SlJsonMeta) -> String {
-    let total_sl: f64 = diffs.iter().map(|d| d.sl_cost).sum();
-    let total_litellm: f64 = diffs.iter().filter_map(|d| d.litellm_cost).sum();
-    let has_litellm = diffs.iter().any(|d| d.litellm_cost.is_some());
+    let matched: Vec<&SlCostDiff> = diffs.iter().filter(|d| d.litellm_cost.is_some()).collect();
+    let unmatched_count = diffs.len() - matched.len();
+    let total_sl: f64 = matched.iter().map(|d| d.sl_cost).sum();
+    let total_litellm: f64 = matched.iter().filter_map(|d| d.litellm_cost).sum();
 
     let totals = serde_json::json!({
         "totalSlCost": total_sl,
-        "totalLitellmCost": if has_litellm { Some(total_litellm) } else { None },
+        "totalLitellmCost": if !matched.is_empty() { Some(total_litellm) } else { None::<f64> },
         "count": diffs.len(),
+        "matchedCount": matched.len(),
+        "unmatchedCount": unmatched_count,
     });
 
     let output = serde_json::json!({
