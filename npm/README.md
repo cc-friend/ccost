@@ -1,6 +1,6 @@
 # ccost <img src="https://raw.githubusercontent.com/toolsu/ccost/main/logo.svg" alt="ccost" width="35" />
 
-Analyze Claude Code token usage and cost from your local conversation history.
+Analyze Claude Code token usage and costs from local conversation logs and statusline data.
 
 Reads JSONL files from `~/.claude/projects/`, deduplicates streaming entries, calculates costs using LiteLLM pricing, and outputs as table, JSON, Markdown, HTML, CSV, TSV, or braille chart (See [Screenshot](#screenshots)).
 

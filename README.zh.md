@@ -1,14 +1,15 @@
 # ccost <img src="https://raw.githubusercontent.com/toolsu/ccost/main/logo.svg" alt="ccost" width="35" />
 
-分析 Claude Code 的 token 使用量和费用。
+分析 Claude Code 本地对话日志和 statusline 数据中的 token 使用量与费用。
 
 读取 `~/.claude/projects/` 下的 JSONL 文件，去重流式条目，基于 LiteLLM 定价计算费用，支持多种分组维度，输出为表格、JSON、Markdown、HTML、CSV、TSV 或终端 braille 图表（见[截图](#截图)）。
 
-[`ccost sl` 子命令](#状态栏数据分析ccost-sl)分析 `~/.claude/statusline.jsonl`，用于速率限制追踪、会话汇总、预算估算和费用对比（参见 [`ccost` 与 `ccost sl` 的对比](#ccost-与-ccost-sl)）。
+[`ccost sl` 子命令](#状态栏数据分析ccost-sl)（请先[配置 statusline.jsonl](#配置-statuslinejsonl)）分析 `~/.claude/statusline.jsonl`，用于速率限制追踪、会话汇总、预算估算和费用对比（参见 [`ccost` 与 `ccost sl` 的对比](#ccost-与-ccost-sl)）。
 
 使用 Rust 编写，速度极快，测试完善。同时也是 [Claude Code 仪表盘](https://github.com/toolsu/claude-code-dashboard)（一个 Tauri 桌面应用）的底层库。
 
 [![crates.io](https://img.shields.io/crates/v/ccost)](https://crates.io/crates/ccost) [![npm](https://img.shields.io/npm/v/ccost)](https://www.npmjs.com/package/ccost) [![CI](https://github.com/toolsu/ccost/actions/workflows/ci.yml/badge.svg)](https://github.com/toolsu/ccost/actions/workflows/ci.yml) [![License](https://img.shields.io/badge/license-MIT-brightgreen)](https://github.com/toolsu/ccost/blob/main/LICENSE)
+
 [English Docs](https://github.com/toolsu/ccost#readme)
 
 ## 安装

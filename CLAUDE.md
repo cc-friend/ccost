@@ -6,8 +6,6 @@ CLI and library: reads Claude Code JSONL from `~/.claude/projects/` and `~/.conf
 
 Also includes `ccost sl` subcommand: reads `~/.claude/statusline.jsonl` for rate limit tracking, session summaries, 5h budget estimation, and cost cross-comparison.
 
-Rust port of [ccost](https://github.com/toolsu/ccost) (TypeScript).
-
 ## Architecture
 
 Main pipeline: `load_records → calculate_cost → group_records → format`
