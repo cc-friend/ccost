@@ -8,6 +8,9 @@
 
 使用 Rust 编写，速度极快，测试完善。同时也是 [Claude Code 仪表盘](https://github.com/toolsu/claude-code-dashboard)（一个 Tauri 桌面应用）的底层库。
 
+[![crates.io](https://img.shields.io/crates/v/ccost)](https://crates.io/crates/ccost) [![npm](https://img.shields.io/npm/v/ccost)](https://www.npmjs.com/package/ccost) [![CI](https://github.com/toolsu/ccost/actions/workflows/ci.yml/badge.svg)](https://github.com/toolsu/ccost/actions/workflows/ci.yml) [![License](https://img.shields.io/badge/license-MIT-brightgreen)](https://github.com/toolsu/ccost/blob/main/LICENSE)
+[English Docs](https://github.com/toolsu/ccost#readme)
+
 ## 安装
 
 ```bash
