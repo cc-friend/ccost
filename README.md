@@ -8,6 +8,9 @@ The [`ccost sl` subcommand](#statusline-analysis) analyzes `~/.claude/statusline
 
 Blazing fast CLI and library written in Rust with thorough tests. Also powers [Claude Code Dashboard](https://github.com/toolsu/claude-code-dashboard), a Tauri desktop app for visualizing your Claude Code usage and more.
 
+[![crates.io](https://img.shields.io/crates/v/ccost)](https://crates.io/crates/ccost) [![npm](https://img.shields.io/npm/v/ccost)](https://www.npmjs.com/package/ccost) [![CI](https://github.com/toolsu/ccost/actions/workflows/ci.yml/badge.svg)](https://github.com/toolsu/ccost/actions/workflows/ci.yml) [![License](https://img.shields.io/badge/license-MIT-brightgreen)](https://github.com/toolsu/ccost/blob/main/LICENSE)
+[中文文档](https://github.com/toolsu/ccost/blob/main/README.zh.md)
+
 ## Install
 
 ```bash
