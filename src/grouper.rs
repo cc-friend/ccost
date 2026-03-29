@@ -92,7 +92,6 @@ fn format_timestamp_resolved(record: &PricedTokenRecord, fmt: &str, tz: &Resolve
     }
 }
 
-
 /// Aggregate numeric fields from a slice of priced token records into a `GroupedData`.
 fn aggregate(label: &str, records: &[&PricedTokenRecord]) -> GroupedData {
     let mut input_tokens: u64 = 0;
@@ -250,27 +249,39 @@ mod tests {
     use chrono::{TimeZone, Utc};
 
     fn mock_record(date: &str, model: &str, session: &str, project: &str) -> PricedTokenRecord {
-        let ts = Utc.with_ymd_and_hms(
-            date[..4].parse().unwrap(),
-            date[5..7].parse().unwrap(),
-            date[8..10].parse().unwrap(),
-            12, 0, 0,
-        ).unwrap();
+        let ts = Utc
+            .with_ymd_and_hms(
+                date[..4].parse().unwrap(),
+                date[5..7].parse().unwrap(),
+                date[8..10].parse().unwrap(),
+                12,
+                0,
+                0,
+            )
+            .unwrap();
         PricedTokenRecord {
             timestamp: ts,
             model: model.to_string(),
             session_id: session.to_string(),
             project: project.to_string(),
-            input_tokens: 100, output_tokens: 50,
-            cache_creation_tokens: 0, cache_read_tokens: 0,
-            input_cost: 0.01, cache_creation_cost: 0.0,
-            cache_read_cost: 0.0, output_cost: 0.02, total_cost: 0.03,
+            input_tokens: 100,
+            output_tokens: 50,
+            cache_creation_tokens: 0,
+            cache_read_tokens: 0,
+            input_cost: 0.01,
+            cache_creation_cost: 0.0,
+            cache_read_cost: 0.0,
+            output_cost: 0.02,
+            total_cost: 0.03,
         }
     }
 
     #[test]
     fn test_shorten_model_name_strips_claude_and_date() {
-        assert_eq!(shorten_model_name("claude-3-5-sonnet-20241022"), "3-5-sonnet");
+        assert_eq!(
+            shorten_model_name("claude-3-5-sonnet-20241022"),
+            "3-5-sonnet"
+        );
     }
 
     #[test]
@@ -286,19 +297,28 @@ mod tests {
     #[test]
     fn test_get_group_key_session() {
         let rec = mock_record("2026-03-15", "model", "sess-abc", "proj");
-        assert_eq!(get_group_key(&rec, GroupDimension::Session, None), "sess-abc");
+        assert_eq!(
+            get_group_key(&rec, GroupDimension::Session, None),
+            "sess-abc"
+        );
     }
 
     #[test]
     fn test_get_group_key_project() {
         let rec = mock_record("2026-03-15", "model", "s1", "my-project");
-        assert_eq!(get_group_key(&rec, GroupDimension::Project, None), "my-project");
+        assert_eq!(
+            get_group_key(&rec, GroupDimension::Project, None),
+            "my-project"
+        );
     }
 
     #[test]
     fn test_get_group_key_model_shortens() {
         let rec = mock_record("2026-03-15", "claude-3-5-sonnet-20241022", "s1", "proj");
-        assert_eq!(get_group_key(&rec, GroupDimension::Model, None), "3-5-sonnet");
+        assert_eq!(
+            get_group_key(&rec, GroupDimension::Model, None),
+            "3-5-sonnet"
+        );
     }
 
     #[test]

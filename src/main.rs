@@ -101,7 +101,12 @@ fn build_command() -> Command {
         )
         .arg(Arg::new("chart").long("chart").value_name("mode"))
         .arg(Arg::new("copy").long("copy").value_name("format"))
-        .arg(Arg::new("help").long("help").short('h').action(ArgAction::SetTrue))
+        .arg(
+            Arg::new("help")
+                .long("help")
+                .short('h')
+                .action(ArgAction::SetTrue),
+        )
         .arg(
             Arg::new("version")
                 .long("version")
@@ -155,7 +160,12 @@ fn build_sl_subcommand() -> Command {
                 .long("pricing-data")
                 .value_name("path"),
         )
-        .arg(Arg::new("help").long("help").short('h').action(ArgAction::SetTrue))
+        .arg(
+            Arg::new("help")
+                .long("help")
+                .short('h')
+                .action(ArgAction::SetTrue),
+        )
 }
 
 fn main() {
@@ -963,44 +973,43 @@ fn run_sl(matches: &clap::ArgMatches) {
 
     // Chart mode
     if let Some(chart) = chart_mode {
-        let (keys, values, title, y_label_fn): ChartData =
-            match chart {
-                SlChartMode::FiveHour => {
-                    let entries = aggregate_ratelimit(&records);
-                    let k: Vec<String> = entries
-                        .iter()
-                        .map(|e| fmt_dt(&e.ts, tz_opt.as_deref(), "%m-%dT%H:%M"))
-                        .collect();
-                    let v: Vec<f64> = entries.iter().map(|e| e.five_hour_pct as f64).collect();
-                    (k, v, "5-Hour Rate Limit %".to_string(), y_label_percent)
-                }
-                SlChartMode::OneWeek => {
-                    let entries = aggregate_ratelimit(&records);
-                    let k: Vec<String> = entries
-                        .iter()
-                        .map(|e| fmt_dt(&e.ts, tz_opt.as_deref(), "%m-%dT%H:%M"))
-                        .collect();
-                    let v: Vec<f64> = entries.iter().map(|e| e.seven_day_pct as f64).collect();
-                    (k, v, "1-Week Rate Limit %".to_string(), y_label_percent)
-                }
-                SlChartMode::Cost => {
-                    let sessions = aggregate_sessions(&records);
-                    // Cumulative cost
-                    let mut cumulative = 0.0_f64;
-                    let k: Vec<String> = sessions
-                        .iter()
-                        .map(|s| fmt_dt(&s.last_ts, tz_opt.as_deref(), "%m-%dT%H:%M"))
-                        .collect();
-                    let v: Vec<f64> = sessions
-                        .iter()
-                        .map(|s| {
-                            cumulative += s.total_cost;
-                            cumulative
-                        })
-                        .collect();
-                    (k, v, "Cumulative Cost (USD)".to_string(), y_label_cost)
-                }
-            };
+        let (keys, values, title, y_label_fn): ChartData = match chart {
+            SlChartMode::FiveHour => {
+                let entries = aggregate_ratelimit(&records);
+                let k: Vec<String> = entries
+                    .iter()
+                    .map(|e| fmt_dt(&e.ts, tz_opt.as_deref(), "%m-%dT%H:%M"))
+                    .collect();
+                let v: Vec<f64> = entries.iter().map(|e| e.five_hour_pct as f64).collect();
+                (k, v, "5-Hour Rate Limit %".to_string(), y_label_percent)
+            }
+            SlChartMode::OneWeek => {
+                let entries = aggregate_ratelimit(&records);
+                let k: Vec<String> = entries
+                    .iter()
+                    .map(|e| fmt_dt(&e.ts, tz_opt.as_deref(), "%m-%dT%H:%M"))
+                    .collect();
+                let v: Vec<f64> = entries.iter().map(|e| e.seven_day_pct as f64).collect();
+                (k, v, "1-Week Rate Limit %".to_string(), y_label_percent)
+            }
+            SlChartMode::Cost => {
+                let sessions = aggregate_sessions(&records);
+                // Cumulative cost
+                let mut cumulative = 0.0_f64;
+                let k: Vec<String> = sessions
+                    .iter()
+                    .map(|s| fmt_dt(&s.last_ts, tz_opt.as_deref(), "%m-%dT%H:%M"))
+                    .collect();
+                let v: Vec<f64> = sessions
+                    .iter()
+                    .map(|s| {
+                        cumulative += s.total_cost;
+                        cumulative
+                    })
+                    .collect();
+                (k, v, "Cumulative Cost (USD)".to_string(), y_label_cost)
+            }
+        };
 
         let chart_output = render_chart_raw(&keys, &values, &title, y_label_fn, None, None);
 

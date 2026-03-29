@@ -421,7 +421,10 @@ fn build_unified_row(data: &UnifiedRowData, opts: &SlFormatOptions) -> Vec<Strin
 
     if opts.compact {
         row.push(data.sessions.to_string());
-        row.push(fmt_pct_range(data.min_five_hour_pct, data.max_five_hour_pct));
+        row.push(fmt_pct_range(
+            data.min_five_hour_pct,
+            data.max_five_hour_pct,
+        ));
     } else {
         let api_time_str = fmt_duration(data.api_duration_ms);
         let lines_str = fmt_lines(data.lines_added, data.lines_removed, opts.color);
@@ -429,8 +432,14 @@ fn build_unified_row(data: &UnifiedRowData, opts: &SlFormatOptions) -> Vec<Strin
         row.push(api_time_str);
         row.push(lines_str);
         row.push(data.sessions.to_string());
-        row.push(fmt_pct_range(data.min_five_hour_pct, data.max_five_hour_pct));
-        row.push(fmt_pct_range(data.min_seven_day_pct, data.max_seven_day_pct));
+        row.push(fmt_pct_range(
+            data.min_five_hour_pct,
+            data.max_five_hour_pct,
+        ));
+        row.push(fmt_pct_range(
+            data.min_seven_day_pct,
+            data.max_seven_day_pct,
+        ));
     }
 
     row

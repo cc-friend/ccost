@@ -827,7 +827,9 @@ fn test_cost_diff_requires_per_session() {
         .args(["sl", "--file", path, "--cost-diff", "--per", "day"])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("--cost-diff requires --per session"));
+        .stderr(predicate::str::contains(
+            "--cost-diff requires --per session",
+        ));
 }
 
 /// 27. --per action TOTAL with the standard test fixture.
