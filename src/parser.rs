@@ -344,7 +344,10 @@ fn parse_ts_val(val: &TimestampVal) -> Option<DateTime<Utc>> {
 
 fn extract_timestamp_raw(rec: &RawRecord) -> Option<DateTime<Utc>> {
     // Top-level: timestamp, createdAt, updatedAt
-    for val in [&rec.timestamp, &rec.created_at, &rec.updated_at].into_iter().flatten() {
+    for val in [&rec.timestamp, &rec.created_at, &rec.updated_at]
+        .into_iter()
+        .flatten()
+    {
         if let Some(dt) = parse_ts_val(val) {
             return Some(dt);
         }
@@ -861,7 +864,9 @@ mod tests {
 
     #[test]
     fn test_extract_session_id_main_file() {
-        let path = Path::new("/home/user/.claude/projects/-proj/abc12345-1234-5678-9abc-def012345678.jsonl");
+        let path = Path::new(
+            "/home/user/.claude/projects/-proj/abc12345-1234-5678-9abc-def012345678.jsonl",
+        );
         assert_eq!(
             extract_session_id(path),
             "abc12345-1234-5678-9abc-def012345678"

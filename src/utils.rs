@@ -244,7 +244,10 @@ mod tests {
     #[test]
     fn test_parse_datetime_date_only() {
         let dt = parse_datetime("2026-03-15").unwrap();
-        assert_eq!(dt.format("%Y-%m-%d %H:%M:%S").to_string(), "2026-03-15 00:00:00");
+        assert_eq!(
+            dt.format("%Y-%m-%d %H:%M:%S").to_string(),
+            "2026-03-15 00:00:00"
+        );
     }
 
     #[test]
@@ -273,9 +276,12 @@ mod tests {
     #[test]
     fn test_compute_date_range_5h_from() {
         let (from, to) = compute_date_range(
-            None, None,
-            Some("2026-03-15T10:00:00".to_string()), None,
-            None, None,
+            None,
+            None,
+            Some("2026-03-15T10:00:00".to_string()),
+            None,
+            None,
+            None,
         );
         assert_eq!(from.unwrap(), "2026-03-15T10:00:00");
         assert_eq!(to.unwrap(), "2026-03-15T15:00:00");
@@ -284,8 +290,12 @@ mod tests {
     #[test]
     fn test_compute_date_range_1w_to() {
         let (from, to) = compute_date_range(
-            None, None, None, None,
-            None, Some("2026-03-15T00:00:00".to_string()),
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some("2026-03-15T00:00:00".to_string()),
         );
         assert_eq!(to.unwrap(), "2026-03-15T00:00:00");
         assert_eq!(from.unwrap(), "2026-03-08T00:00:00");
@@ -294,8 +304,12 @@ mod tests {
     #[test]
     fn test_compute_date_range_passthrough() {
         let (from, to) = compute_date_range(
-            Some("2026-03-01".to_string()), Some("2026-03-31".to_string()),
-            None, None, None, None,
+            Some("2026-03-01".to_string()),
+            Some("2026-03-31".to_string()),
+            None,
+            None,
+            None,
+            None,
         );
         assert_eq!(from.unwrap(), "2026-03-01");
         assert_eq!(to.unwrap(), "2026-03-31");

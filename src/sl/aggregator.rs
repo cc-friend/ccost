@@ -347,7 +347,8 @@ pub fn aggregate_ratelimit(records: &[SlRecord]) -> Vec<SlRateLimitEntry> {
     // last emitted entry.
 
     // Build map of last entry index per session (owned keys to avoid borrow conflict).
-    let mut last_entry_idx: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let mut last_entry_idx: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
     for (i, entry) in result.iter().enumerate() {
         last_entry_idx.insert(entry.session_id.clone(), i);
     }
