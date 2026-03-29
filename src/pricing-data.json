@@ -1,0 +1,89 @@
+{
+  "fetchedAt": "2026-03-29T01:06:39.900Z",
+  "models": {
+    "claude-3-5-haiku-20241022": {
+      "inputCostPerToken": 8e-7,
+      "outputCostPerToken": 4e-6,
+      "cacheCreationCostPerToken": 1e-6,
+      "cacheReadCostPerToken": 8e-8
+    },
+    "claude-sonnet-4-5-20250929": {
+      "inputCostPerToken": 3e-6,
+      "outputCostPerToken": 0.000015,
+      "cacheCreationCostPerToken": 3.75e-6,
+      "cacheReadCostPerToken": 3e-7
+    },
+    "claude-3-5-sonnet-20241022": {
+      "inputCostPerToken": 3e-6,
+      "outputCostPerToken": 0.000015,
+      "cacheCreationCostPerToken": 3.75e-6,
+      "cacheReadCostPerToken": 3e-7
+    },
+    "claude-3-5-sonnet-20240620": {
+      "inputCostPerToken": 3e-6,
+      "outputCostPerToken": 0.000015,
+      "cacheCreationCostPerToken": 3.75e-6,
+      "cacheReadCostPerToken": 3e-7
+    },
+    "claude-haiku-4-5-20251001": {
+      "inputCostPerToken": 1e-6,
+      "outputCostPerToken": 5e-6,
+      "cacheCreationCostPerToken": 1.25e-6,
+      "cacheReadCostPerToken": 1e-7
+    },
+    "claude-opus-4-5-20251101": {
+      "inputCostPerToken": 5e-6,
+      "outputCostPerToken": 0.000025,
+      "cacheCreationCostPerToken": 6.25e-6,
+      "cacheReadCostPerToken": 5e-7
+    },
+    "claude-sonnet-4-6": {
+      "inputCostPerToken": 3e-6,
+      "outputCostPerToken": 0.000015,
+      "cacheCreationCostPerToken": 3.75e-6,
+      "cacheReadCostPerToken": 3e-7
+    },
+    "claude-3-7-sonnet-20250219": {
+      "inputCostPerToken": 3e-6,
+      "outputCostPerToken": 0.000015,
+      "cacheCreationCostPerToken": 3.75e-6,
+      "cacheReadCostPerToken": 3e-7
+    },
+    "claude-haiku-4-5@20251001": {
+      "inputCostPerToken": 1e-6,
+      "outputCostPerToken": 5e-6,
+      "cacheCreationCostPerToken": 1.25e-6,
+      "cacheReadCostPerToken": 1e-7
+    },
+    "claude-opus-4-6": {
+      "inputCostPerToken": 5e-6,
+      "outputCostPerToken": 0.000025,
+      "cacheCreationCostPerToken": 6.25e-6,
+      "cacheReadCostPerToken": 5e-7
+    },
+    "claude-3-7-sonnet-20240620": {
+      "inputCostPerToken": 3.6e-6,
+      "outputCostPerToken": 0.000018,
+      "cacheCreationCostPerToken": 4.5e-6,
+      "cacheReadCostPerToken": 3.6e-7
+    },
+    "claude-opus-4-1-20250805": {
+      "inputCostPerToken": 0.000015,
+      "outputCostPerToken": 0.000075,
+      "cacheCreationCostPerToken": 0.00001875,
+      "cacheReadCostPerToken": 1.5e-6
+    },
+    "claude-opus-4-20250514": {
+      "inputCostPerToken": 0.000015,
+      "outputCostPerToken": 0.000075,
+      "cacheCreationCostPerToken": 0.00001875,
+      "cacheReadCostPerToken": 1.5e-6
+    },
+    "claude-sonnet-4-20250514": {
+      "inputCostPerToken": 3e-6,
+      "outputCostPerToken": 0.000015,
+      "cacheCreationCostPerToken": 3.75e-6,
+      "cacheReadCostPerToken": 3e-7
+    }
+  }
+}
