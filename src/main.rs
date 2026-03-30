@@ -1,9 +1,20 @@
 use std::collections::HashMap;
 use std::fs;
+use std::io::Write;
 use std::path::Path;
 use std::process;
 
 use clap::{Arg, ArgAction, Command};
+
+/// Write content to a file, or to stdout if filename is "-".
+fn write_output(filename: &str, content: &str) -> std::io::Result<()> {
+    if filename == "-" {
+        std::io::stdout().write_all(content.as_bytes())
+    } else {
+        fs::write(filename, content)
+    }
+}
+
 use regex::Regex;
 
 use ccost::formatters::chart::{
@@ -589,11 +600,13 @@ fn main() {
             let ext = output_format.as_deref().unwrap_or("txt");
             let target_filename = filename_opt.unwrap_or_else(|| format!("ccost.{}", ext));
             let file_content = format!("{}\n{}\n", chart_output, footer);
-            if let Err(e) = fs::write(&target_filename, &file_content) {
+            if let Err(e) = write_output(&target_filename, &file_content) {
                 eprintln!("Error writing to '{}': {}", target_filename, e);
                 process::exit(1);
             }
-            eprintln!("Wrote report to {}", target_filename);
+            if target_filename != "-" {
+                eprintln!("Wrote report to {}", target_filename);
+            }
         } else {
             // Print chart to stdout
             print!("{}", chart_output);
@@ -642,12 +655,14 @@ fn main() {
     let ext = output_fmt.map(ext_for_format).unwrap_or("txt");
     let target_filename = filename_opt.unwrap_or_else(|| format!("ccost.{}", ext));
 
-    if let Err(e) = fs::write(&target_filename, &file_content) {
+    if let Err(e) = write_output(&target_filename, &file_content) {
         eprintln!("Error writing to '{}': {}", target_filename, e);
         process::exit(1);
     }
 
-    eprintln!("Wrote report to {}", target_filename);
+    if target_filename != "-" {
+        eprintln!("Wrote report to {}", target_filename);
+    }
     eprintln!("{}", footer);
 }
 
@@ -1026,11 +1041,13 @@ fn run_sl(matches: &clap::ArgMatches) {
             let ext = output_format.as_deref().unwrap_or("txt");
             let target_filename = filename_opt.unwrap_or_else(|| format!("ccost.{}", ext));
             let file_content = format!("{}\n", chart_output);
-            if let Err(e) = fs::write(&target_filename, &file_content) {
+            if let Err(e) = write_output(&target_filename, &file_content) {
                 eprintln!("Error writing to '{}': {}", target_filename, e);
                 process::exit(1);
             }
-            eprintln!("Wrote report to {}", target_filename);
+            if target_filename != "-" {
+                eprintln!("Wrote report to {}", target_filename);
+            }
         } else {
             print!("{}", chart_output);
         }
@@ -1222,11 +1239,13 @@ fn run_sl(matches: &clap::ArgMatches) {
     let ext = output_fmt.map(ext_for_format).unwrap_or("txt");
     let target_filename = filename_opt.unwrap_or_else(|| format!("ccost.{}", ext));
 
-    if let Err(e) = fs::write(&target_filename, &file_content) {
+    if let Err(e) = write_output(&target_filename, &file_content) {
         eprintln!("Error writing to '{}': {}", target_filename, e);
         process::exit(1);
     }
-    eprintln!("Wrote report to {}", target_filename);
+    if target_filename != "-" {
+        eprintln!("Wrote report to {}", target_filename);
+    }
 }
 
 #[allow(clippy::too_many_arguments)]

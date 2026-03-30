@@ -261,7 +261,7 @@ fn test_sl_chart_5h() {
         .stdout(predicate::str::contains("5-Hour Rate Limit"));
 }
 
-/// 5. --per session --output json --filename /dev/stdout emits valid JSON
+/// 5. --per session --output json --filename - emits valid JSON
 ///    with meta.source = "ccost-sl" and a "data" array.
 #[test]
 fn test_sl_json_output() {
@@ -278,7 +278,7 @@ fn test_sl_json_output() {
             "--output",
             "json",
             "--filename",
-            "/dev/stdout",
+            "-",
         ])
         .output()
         .expect("run command");
@@ -505,7 +505,7 @@ fn test_sl_output_html() {
             "--output",
             "html",
             "--filename",
-            "/dev/stdout",
+            "-",
         ])
         .output()
         .expect("run command");
@@ -551,7 +551,7 @@ fn test_sl_output_markdown() {
             "--output",
             "markdown",
             "--filename",
-            "/dev/stdout",
+            "-",
         ])
         .output()
         .expect("run command");
@@ -585,7 +585,7 @@ fn test_sl_output_tsv() {
             "--output",
             "tsv",
             "--filename",
-            "/dev/stdout",
+            "-",
         ])
         .output()
         .expect("run command");
@@ -629,7 +629,7 @@ fn test_sl_1h_output_html() {
             "--output",
             "html",
             "--filename",
-            "/dev/stdout",
+            "-",
         ])
         .output()
         .expect("run command");
@@ -801,7 +801,7 @@ fn test_sl_cost_diff_json() {
             "--output",
             "json",
             "--filename",
-            "/dev/stdout",
+            "-",
         ])
         .output()
         .expect("run command");

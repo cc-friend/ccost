@@ -31,8 +31,8 @@ pub fn load_pricing_from_file(file_path: &str) -> Result<PricingData, Box<dyn st
 /// Filters for Anthropic Claude models, normalizes keys, and maps cost fields.
 pub fn fetch_live_pricing() -> Result<PricingData, Box<dyn std::error::Error>> {
     let url = "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json";
-    let resp = reqwest::blocking::get(url)?;
-    let raw: serde_json::Value = resp.json()?;
+    let resp = minreq::get(url).send()?;
+    let raw: serde_json::Value = serde_json::from_str(resp.as_str()?)?;
 
     let obj = raw.as_object().ok_or("Expected top-level JSON object")?;
 
