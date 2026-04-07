@@ -391,9 +391,10 @@ Streaming entries share the same `messageId:requestId` key with increasing `outp
 Per-record cost via model-to-price lookup:
 1. Exact match
 2. Strip date suffix (`-YYYYMMDD` / `@YYYYMMDD`), retry
-3. Substring match among `claude-*` keys
+3. Case-insensitive exact match (with and without date suffix)
+4. Case-insensitive substring match
 
-Bundled at compile time from LiteLLM. Use `--live-pricing` for latest or `--pricing-data` for custom.
+Bundled pricing includes Claude, GLM, Kimi, and MiniMax (popular coding LLMs with official Claude Code-compatible API endpoints) from LiteLLM. Use `--live-pricing` for latest or `--pricing-data` for custom.
 
 ### `ccost` vs `ccost sl`
 

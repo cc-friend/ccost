@@ -386,12 +386,13 @@ struct GroupedData {
 
 ### 定价
 
-按记录计算费用，模型到价格的查找分三级：
+按记录计算费用，模型到价格的查找分四级：
 1. 精确匹配
 2. 去掉日期后缀（`-YYYYMMDD` / `@YYYYMMDD`）后重试
-3. `claude-*` key 中的子串匹配
+3. 大小写不敏感精确匹配（含去日期后缀）
+4. 大小写不敏感子串匹配
 
-定价数据编译时从 LiteLLM 打包。用 `--live-pricing` 获取最新，或 `--pricing-data` 指定自定义文件。
+内置定价包含 Claude、GLM、Kimi 和 MiniMax（官方提供 Claude Code 兼容 API 的热门编程大模型）的模型，数据来自 LiteLLM。用 `--live-pricing` 获取最新，或 `--pricing-data` 指定自定义文件。
 
 ### `ccost` 与 `ccost sl`
 
