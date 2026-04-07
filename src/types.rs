@@ -77,10 +77,10 @@ pub struct GroupedData {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelPricing {
-    pub input_cost_per_token: f64,
-    pub output_cost_per_token: f64,
     pub cache_creation_cost_per_token: f64,
     pub cache_read_cost_per_token: f64,
+    pub input_cost_per_token: f64,
+    pub output_cost_per_token: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

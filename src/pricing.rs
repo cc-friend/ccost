@@ -8,10 +8,17 @@ use crate::types::{ModelPricing, PricedTokenRecord, PricingData, TokenRecord};
 
 static DATE_SUFFIX_PRICING_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"[-@]\d{8}$").unwrap());
-static PREFIX_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^anthropic[/.]").unwrap());
 static VERSION_SUFFIX_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"-v\d+(?::\d+)?$").unwrap());
-static VALID_NAME_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^claude-\w+-\d").unwrap());
+
+/// Supported LiteLLM key prefixes and the provider prefix to strip.
+/// Format: (key_prefix_to_match, prefix_to_strip)
+const SUPPORTED_PREFIXES: &[(&str, &str)] = &[
+    ("anthropic.claude-", "anthropic."),
+    ("minimax/MiniMax-", "minimax/"),
+    ("moonshot/kimi-", "moonshot/"),
+    ("zai/glm-", "zai/"),
+];
 
 /// Load bundled pricing data embedded at compile time.
 pub fn load_pricing() -> PricingData {
@@ -36,7 +43,8 @@ pub fn load_pricing_from_file(file_path: &str) -> Result<PricingData, Box<dyn st
 
 /// Fetch live pricing data from the LiteLLM repository on GitHub.
 ///
-/// Filters for Anthropic Claude models, normalizes keys, and maps cost fields.
+/// Filters for models from supported providers (Anthropic, MiniMax, Kimi, GLM),
+/// normalizes keys by stripping provider prefixes, and maps cost fields.
 pub fn fetch_live_pricing() -> Result<PricingData, Box<dyn std::error::Error>> {
     let url = "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json";
     let resp = minreq::get(url).send()?;
@@ -44,20 +52,18 @@ pub fn fetch_live_pricing() -> Result<PricingData, Box<dyn std::error::Error>> {
 
     let obj = raw.as_object().ok_or("Expected top-level JSON object")?;
 
-    let prefix_re = &*PREFIX_RE;
     let version_suffix_re = &*VERSION_SUFFIX_RE;
-    let valid_name_re = &*VALID_NAME_RE;
 
     let mut models: HashMap<String, ModelPricing> = HashMap::new();
 
     for (key, value) in obj.iter() {
-        let key: &String = key;
-        let value: &serde_json::Value = value;
+        // Find matching prefix and strip provider part
+        let stripped = SUPPORTED_PREFIXES
+            .iter()
+            .find(|(prefix, _)| key.starts_with(prefix))
+            .map(|(_, strip)| &key[strip.len()..]);
 
-        // Must start with anthropic/ or anthropic.
-        if !key.starts_with("anthropic/claude-") && !key.starts_with("anthropic.claude-") {
-            continue;
-        }
+        let Some(stripped) = stripped else { continue };
 
         // Must have a numeric input_cost_per_token
         let input_cost = match value
@@ -68,16 +74,11 @@ pub fn fetch_live_pricing() -> Result<PricingData, Box<dyn std::error::Error>> {
             None => continue,
         };
 
-        // Strip the anthropic/ or anthropic. prefix
-        let stripped = prefix_re.replace(key.as_str(), "").to_string();
-
         // Strip version suffix like -v1, -v2:0
-        let normalized = version_suffix_re.replace(&stripped, "").to_string();
+        let normalized = version_suffix_re.replace(stripped, "").to_string();
 
-        // Must match claude-<word>-<digit> pattern
-        if !valid_name_re.is_match(&normalized) {
-            continue;
-        }
+        // Deduplicate @date vs -date variants (e.g. claude-haiku-4-5@20251001 → claude-haiku-4-5-20251001)
+        let normalized = normalized.replace('@', "-");
 
         // First match per normalized name wins
         if models.contains_key(&normalized) {
@@ -117,7 +118,8 @@ pub fn fetch_live_pricing() -> Result<PricingData, Box<dyn std::error::Error>> {
 ///
 /// 1. Direct exact match
 /// 2. Strip trailing `-YYYYMMDD` or `@YYYYMMDD` date suffix, retry exact match
-/// 3. Substring containment among keys starting with `claude-`
+/// 3. Case-insensitive exact match (with and without date suffix)
+/// 4. Case-insensitive substring containment
 pub fn match_model_name<'a>(
     jsonl_name: &str,
     pricing_models: &'a HashMap<String, ModelPricing>,
@@ -135,12 +137,20 @@ pub fn match_model_name<'a>(
         }
     }
 
-    // Tier 3: substring containment
+    // Tier 3: case-insensitive exact match (with and without date suffix)
+    let jsonl_lower = jsonl_name.to_ascii_lowercase();
+    let stripped_lower = stripped.to_ascii_lowercase();
     for (key, pricing) in pricing_models {
-        if !key.starts_with("claude-") {
-            continue;
+        let key_lower = key.to_ascii_lowercase();
+        if key_lower == jsonl_lower || (stripped != jsonl_name && key_lower == stripped_lower) {
+            return Some(pricing);
         }
-        if jsonl_name.contains(key.as_str()) || key.contains(jsonl_name) {
+    }
+
+    // Tier 4: case-insensitive substring containment
+    for (key, pricing) in pricing_models {
+        let key_lower = key.to_ascii_lowercase();
+        if jsonl_lower.contains(&key_lower) || key_lower.contains(&jsonl_lower) {
             return Some(pricing);
         }
     }
@@ -279,12 +289,43 @@ mod tests {
     }
 
     #[test]
-    fn test_match_substring_only_claude_keys() {
-        // Non-claude pricing key should not match via substring tier
-        let models = make_pricing(vec![("some-model-x", 0.01, 0.02, 0.0, 0.0)]);
-        let result = match_model_name("some-model-x-variant", &models);
-        // Tier 1 and 2 fail, tier 3 skips non-claude keys
-        assert!(result.is_none());
+    fn test_match_glm_case_insensitive() {
+        // LiteLLM stores "glm-4.7", user sets "GLM-4.7"
+        let models = make_pricing(vec![("glm-4.7", 0.01, 0.02, 0.0, 0.0)]);
+        assert!(match_model_name("GLM-4.7", &models).is_some());
+        assert!(match_model_name("glm-4.7", &models).is_some());
+    }
+
+    #[test]
+    fn test_match_glm_air_case_insensitive() {
+        let models = make_pricing(vec![("glm-4.5-air", 0.005, 0.01, 0.0, 0.0)]);
+        assert!(match_model_name("GLM-4.5-Air", &models).is_some());
+        assert!(match_model_name("glm-4.5-air", &models).is_some());
+    }
+
+    #[test]
+    fn test_match_kimi() {
+        let models = make_pricing(vec![("kimi-k2-thinking", 0.01, 0.02, 0.0, 0.0)]);
+        assert!(match_model_name("kimi-k2-thinking", &models).is_some());
+    }
+
+    #[test]
+    fn test_match_minimax() {
+        let models = make_pricing(vec![("MiniMax-M2.7", 0.01, 0.02, 0.0, 0.0)]);
+        assert!(match_model_name("MiniMax-M2.7", &models).is_some());
+    }
+
+    #[test]
+    fn test_no_match_unrelated_models() {
+        let models = make_pricing(vec![
+            ("claude-opus-4-6", 0.01, 0.02, 0.0, 0.0),
+            ("glm-4.7", 0.01, 0.02, 0.0, 0.0),
+            ("kimi-k2-thinking", 0.01, 0.02, 0.0, 0.0),
+            ("MiniMax-M2.7", 0.01, 0.02, 0.0, 0.0),
+        ]);
+        assert!(match_model_name("gpt-4o", &models).is_none());
+        assert!(match_model_name("gemini-2.5-pro", &models).is_none());
+        assert!(match_model_name("deepseek-r1", &models).is_none());
     }
 
     #[test]

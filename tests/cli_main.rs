@@ -1295,6 +1295,35 @@ fn test_table_compact_with_output_stays_compact() {
 
 // ─── 30. --copy flag ───────────────────────────────────────────────────
 
+fn clear_clipboard() {
+    use std::process;
+    let _ = if cfg!(target_os = "macos") {
+        process::Command::new("pbcopy")
+            .stdin(process::Stdio::piped())
+            .spawn()
+            .and_then(|mut c| {
+                drop(c.stdin.take());
+                c.wait()
+            })
+    } else {
+        process::Command::new("xclip")
+            .args(["-selection", "clipboard"])
+            .stdin(process::Stdio::piped())
+            .spawn()
+            .or_else(|_| {
+                process::Command::new("xsel")
+                    .args(["--clipboard", "--input"])
+                    .stdin(process::Stdio::piped())
+                    .spawn()
+            })
+            .or_else(|_| process::Command::new("wl-copy").arg("--clear").spawn())
+            .and_then(|mut c| {
+                drop(c.stdin.take());
+                c.wait()
+            })
+    };
+}
+
 #[test]
 fn test_copy_invalid_format_error() {
     let dir = two_record_fixture();
@@ -1313,6 +1342,7 @@ fn test_copy_invalid_format_error() {
 
 #[test]
 fn test_copy_with_output_both_work() {
+    clear_clipboard();
     // --copy should work alongside --output (file still gets written)
     let dir = two_record_fixture();
     let out_dir = TempDir::new().unwrap();
@@ -1346,12 +1376,14 @@ fn test_copy_with_output_both_work() {
         stderr.contains("Copied markdown to clipboard") || stderr.contains("clipboard"),
         "stderr should mention clipboard operation"
     );
+    clear_clipboard();
 }
 
 // ─── 31. --copy works with terminal output ─────────────────────────────
 
 #[test]
 fn test_copy_with_terminal_output() {
+    clear_clipboard();
     // --copy alone should still print table to stdout
     let dir = two_record_fixture();
     let output = Command::cargo_bin("ccost")
@@ -1379,12 +1411,14 @@ fn test_copy_with_terminal_output() {
         stderr.contains("clipboard"),
         "stderr should mention clipboard operation"
     );
+    clear_clipboard();
 }
 
 // ─── 32. --copy with --chart ───────────────────────────────────────────
 
 #[test]
 fn test_copy_with_chart() {
+    clear_clipboard();
     let dir = two_record_fixture();
     let output = Command::cargo_bin("ccost")
         .unwrap()
@@ -1408,4 +1442,5 @@ fn test_copy_with_chart() {
         stderr.contains("clipboard"),
         "stderr should mention clipboard operation with chart + copy"
     );
+    clear_clipboard();
 }
