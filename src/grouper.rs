@@ -65,6 +65,13 @@ fn get_group_key_resolved(
         GroupDimension::Session => record.session_id.clone(),
         GroupDimension::Project => record.project.clone(),
         GroupDimension::Model => shorten_model_name(&record.model),
+        GroupDimension::Subagent => {
+            if record.agent_id.is_empty() {
+                "(main)".to_string()
+            } else {
+                record.agent_id.clone()
+            }
+        }
         GroupDimension::Day => format_timestamp_resolved(record, "%Y-%m-%d", tz),
         GroupDimension::Hour => format_timestamp_resolved(record, "%Y-%m-%d %H:00", tz),
         GroupDimension::Month => format_timestamp_resolved(record, "%Y-%m", tz),
@@ -264,6 +271,7 @@ mod tests {
             model: model.to_string(),
             session_id: session.to_string(),
             project: project.to_string(),
+            agent_id: String::new(),
             input_tokens: 100,
             output_tokens: 50,
             cache_creation_tokens: 0,
@@ -340,6 +348,62 @@ mod tests {
         let rec = mock_record("2026-03-15", "model", "s1", "proj");
         let key = get_group_key(&rec, GroupDimension::Month, Some("UTC"));
         assert_eq!(key, "2026-03");
+    }
+
+    #[test]
+    fn test_get_group_key_subagent_main_session() {
+        let rec = mock_record("2026-03-15", "model", "s1", "proj");
+        // agent_id is empty for main session → "(main)"
+        assert_eq!(
+            get_group_key(&rec, GroupDimension::Subagent, None),
+            "(main)"
+        );
+    }
+
+    #[test]
+    fn test_get_group_key_subagent_with_agent_id() {
+        let mut rec = mock_record("2026-03-15", "model", "s1", "proj");
+        rec.agent_id = "agent-a0f53f284339341b2".to_string();
+        assert_eq!(
+            get_group_key(&rec, GroupDimension::Subagent, None),
+            "agent-a0f53f284339341b2"
+        );
+    }
+
+    #[test]
+    fn test_group_by_subagent() {
+        let main_rec = mock_record("2026-03-15", "model", "s1", "proj");
+        let mut sub_rec = mock_record("2026-03-15", "model", "s1", "proj");
+        sub_rec.agent_id = "agent-abc".to_string();
+
+        // Double the sub_rec tokens to distinguish
+        sub_rec.input_tokens = 200;
+        sub_rec.output_tokens = 100;
+
+        let records = vec![main_rec, sub_rec];
+        let grouped = group_records(
+            &records,
+            &[GroupDimension::Subagent],
+            Some(&GroupOptions {
+                order: SortOrder::Asc,
+                tz: None,
+            }),
+        );
+
+        assert_eq!(grouped.data.len(), 2);
+        let labels: Vec<&str> = grouped.data.iter().map(|d| d.label.as_str()).collect();
+        assert!(labels.contains(&"(main)"));
+        assert!(labels.contains(&"agent-abc"));
+
+        let main_group = grouped.data.iter().find(|d| d.label == "(main)").unwrap();
+        assert_eq!(main_group.input_tokens, 100);
+
+        let sub_group = grouped
+            .data
+            .iter()
+            .find(|d| d.label == "agent-abc")
+            .unwrap();
+        assert_eq!(sub_group.input_tokens, 200);
     }
 
     #[test]

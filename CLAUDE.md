@@ -19,7 +19,9 @@ sl pipeline: `load_sl_records → filter → aggregate (segment-aware) → forma
 
 ## Key design decisions
 
-**Dedup: `messageId:requestId` keep-max-output, global across all files.** Streaming entries have monotonically increasing `output_tokens`; keeping max is order-independent. Same composite key appears in both parent and `subagents/` files — global dedup prevents double-counting. Subagent files are found in both old (`<project>/subagents/<session>_<agent>.jsonl`) and new (`<project>/<session-uuid>/subagents/<agent>.jsonl`) directory structures; `extract_session_id` maps new-structure files to the parent session UUID via the grandparent directory name.
+**Dedup: `messageId:requestId` keep-max-output, global across all files.** Streaming entries have monotonically increasing `output_tokens`; keeping max is order-independent. Same composite key appears in both parent and `subagents/` files — global dedup prevents double-counting. Subagent files are found in both old (`<project>/subagents/<session>_<agent>.jsonl`) and new (`<project>/<session-uuid>/subagents/<agent>.jsonl`) directory structures; `extract_session_and_agent` maps new-structure files to the parent session UUID (via grandparent directory name) and extracts the agent file stem as `agent_id`.
+
+**Subagent tracking:** Each `TokenRecord` and `PricedTokenRecord` carries an `agent_id` field — empty string for main session records, the subagent file stem (e.g. `agent-a0f53f284339341b2`) for subagent records. `GroupDimension::Subagent` groups by this field, labeling main session records as `(main)`.
 
 **Pricing: flat rate per-record before grouping.** Each record gets its model's price. Supports `--live-pricing` (runtime fetch via reqwest) and `--pricing-data <path>` (custom file). Bundled pricing embedded via `include_str!`.
 
@@ -45,7 +47,7 @@ sl pipeline: `load_sl_records → filter → aggregate (segment-aware) → forma
 
 **Hour key format:** Grouper emits `%Y-%m-%d %H:00` (space separator). Chart `auto_granularity_from_labels` detects hour labels by checking `len > 10 && contains(':')` (matches both space and T separators).
 
-**Types:** `GroupDimension` and `SortOrder` implement `std::str::FromStr` (returns `Result<Self, String>`). Use `"day".parse::<GroupDimension>()` or `GroupDimension::from_str("day")`. CLI supports `-h`/`-V` short flags in addition to `--help`/`--version`.
+**Types:** `GroupDimension` and `SortOrder` implement `std::str::FromStr` (returns `Result<Self, String>`). Use `"day".parse::<GroupDimension>()` or `GroupDimension::from_str("day")`. Valid dimensions: `day`, `hour`, `month`, `session`, `project`, `model`, `subagent`. CLI supports `-h`/`-V` short flags in addition to `--help`/`--version`.
 
 ## Commands
 

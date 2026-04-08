@@ -2299,3 +2299,215 @@ fn test_group_by_month() {
     assert_eq!(grouped.data[0].label, "2026-03");
     assert_eq!(grouped.data[1].label, "2026-04");
 }
+
+// ---------------------------------------------------------------------------
+// Subagent dimension: agent_id extraction and grouping
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_subagent_agent_id_extracted_new_structure() {
+    let dir = TempDir::new().unwrap();
+    let proj_dir = dir.path().join("projects").join("test-project");
+    let session_uuid = "abc12345-1234-5678-9abc-def012345678";
+    let subagent_dir = proj_dir.join(session_uuid).join("subagents");
+    fs::create_dir_all(&subagent_dir).unwrap();
+
+    // Main session file
+    let main_rec = mock_rec(
+        "claude-opus-4-6",
+        100,
+        50,
+        0,
+        0,
+        "2026-03-23T10:00:00Z",
+        "req_main",
+        "msg_main",
+    );
+    fs::write(
+        proj_dir.join(format!("{}.jsonl", session_uuid)),
+        serde_json::to_string(&main_rec).unwrap(),
+    )
+    .unwrap();
+
+    // Subagent file
+    let sub_rec = mock_rec(
+        "claude-opus-4-6",
+        200,
+        80,
+        0,
+        0,
+        "2026-03-23T10:05:00Z",
+        "req_sub",
+        "msg_sub",
+    );
+    fs::write(
+        subagent_dir.join("agent-abc123.jsonl"),
+        serde_json::to_string(&sub_rec).unwrap(),
+    )
+    .unwrap();
+
+    let opts = default_load_opts(dir.path());
+    let result = load_records(&opts);
+
+    assert_eq!(result.records.len(), 2);
+
+    let main = result.records.iter().find(|r| r.agent_id.is_empty());
+    let sub = result.records.iter().find(|r| !r.agent_id.is_empty());
+    assert!(main.is_some(), "should have a main session record");
+    assert!(sub.is_some(), "should have a subagent record");
+    assert_eq!(sub.unwrap().agent_id, "agent-abc123");
+    // Both share the same session_id
+    assert_eq!(main.unwrap().session_id, session_uuid);
+    assert_eq!(sub.unwrap().session_id, session_uuid);
+}
+
+#[test]
+fn test_group_by_subagent_dimension() {
+    let dir = TempDir::new().unwrap();
+    let proj_dir = dir.path().join("projects").join("test-project");
+    let session_uuid = "abc12345-1234-5678-9abc-def012345678";
+    let subagent_dir = proj_dir.join(session_uuid).join("subagents");
+    fs::create_dir_all(&subagent_dir).unwrap();
+
+    // Main session file
+    let main_rec = mock_rec(
+        "claude-opus-4-6",
+        100,
+        50,
+        0,
+        0,
+        "2026-03-23T10:00:00Z",
+        "req_main",
+        "msg_main",
+    );
+    fs::write(
+        proj_dir.join(format!("{}.jsonl", session_uuid)),
+        serde_json::to_string(&main_rec).unwrap(),
+    )
+    .unwrap();
+
+    // Two different subagent files
+    let sub1 = mock_rec(
+        "claude-opus-4-6",
+        200,
+        80,
+        0,
+        0,
+        "2026-03-23T10:05:00Z",
+        "req_sub1",
+        "msg_sub1",
+    );
+    let sub2 = mock_rec(
+        "claude-opus-4-6",
+        300,
+        120,
+        0,
+        0,
+        "2026-03-23T10:10:00Z",
+        "req_sub2",
+        "msg_sub2",
+    );
+    fs::write(
+        subagent_dir.join("agent-explorer.jsonl"),
+        serde_json::to_string(&sub1).unwrap(),
+    )
+    .unwrap();
+    fs::write(
+        subagent_dir.join("agent-planner.jsonl"),
+        serde_json::to_string(&sub2).unwrap(),
+    )
+    .unwrap();
+
+    let opts = default_load_opts(dir.path());
+    let result = load_records(&opts);
+    let pricing = load_pricing();
+    let priced = calculate_cost(&result.records, Some(&pricing));
+
+    let dims = vec![GroupDimension::Subagent];
+    let group_opts = default_group_opts();
+    let grouped = group_records(&priced, &dims, Some(&group_opts));
+
+    // 3 groups: (main), agent-explorer, agent-planner
+    assert_eq!(grouped.data.len(), 3);
+    let labels: Vec<&str> = grouped.data.iter().map(|d| d.label.as_str()).collect();
+    assert!(labels.contains(&"(main)"));
+    assert!(labels.contains(&"agent-explorer"));
+    assert!(labels.contains(&"agent-planner"));
+
+    let main_group = grouped.data.iter().find(|d| d.label == "(main)").unwrap();
+    assert_eq!(main_group.input_tokens, 100);
+
+    let explorer = grouped
+        .data
+        .iter()
+        .find(|d| d.label == "agent-explorer")
+        .unwrap();
+    assert_eq!(explorer.input_tokens, 200);
+
+    let planner = grouped
+        .data
+        .iter()
+        .find(|d| d.label == "agent-planner")
+        .unwrap();
+    assert_eq!(planner.input_tokens, 300);
+}
+
+#[test]
+fn test_two_level_session_subagent_grouping() {
+    let dir = TempDir::new().unwrap();
+    let proj_dir = dir.path().join("projects").join("test-project");
+    let session_uuid = "abc12345-1234-5678-9abc-def012345678";
+    let subagent_dir = proj_dir.join(session_uuid).join("subagents");
+    fs::create_dir_all(&subagent_dir).unwrap();
+
+    let main_rec = mock_rec(
+        "claude-opus-4-6",
+        100,
+        50,
+        0,
+        0,
+        "2026-03-23T10:00:00Z",
+        "req_main",
+        "msg_main",
+    );
+    fs::write(
+        proj_dir.join(format!("{}.jsonl", session_uuid)),
+        serde_json::to_string(&main_rec).unwrap(),
+    )
+    .unwrap();
+
+    let sub_rec = mock_rec(
+        "claude-opus-4-6",
+        200,
+        80,
+        0,
+        0,
+        "2026-03-23T10:05:00Z",
+        "req_sub",
+        "msg_sub",
+    );
+    fs::write(
+        subagent_dir.join("agent-abc.jsonl"),
+        serde_json::to_string(&sub_rec).unwrap(),
+    )
+    .unwrap();
+
+    let opts = default_load_opts(dir.path());
+    let result = load_records(&opts);
+    let pricing = load_pricing();
+    let priced = calculate_cost(&result.records, Some(&pricing));
+
+    // Two-level: session > subagent
+    let dims = vec![GroupDimension::Session, GroupDimension::Subagent];
+    let group_opts = default_group_opts();
+    let grouped = group_records(&priced, &dims, Some(&group_opts));
+
+    // One session group with two children
+    assert_eq!(grouped.data.len(), 1);
+    assert_eq!(grouped.data[0].label, session_uuid);
+    let children = grouped.data[0].children.as_ref().unwrap();
+    assert_eq!(children.len(), 2);
+    let child_labels: Vec<&str> = children.iter().map(|c| c.label.as_str()).collect();
+    assert!(child_labels.contains(&"(main)"));
+    assert!(child_labels.contains(&"agent-abc"));
+}
