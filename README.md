@@ -46,7 +46,7 @@ ccost sl --chart 5h                      # rate limit chart
 
 | Flag | Description |
 |------|-------------|
-| `--per <dim>` | Group by: `day`, `hour`, `month`, `session`, `project`, `model`. Up to 2 for nested grouping. Default: `--per day --per model`. |
+| `--per <dim>` | Group by: `day`, `hour`, `month`, `session`, `project`, `model`, `subagent`. Up to 2 for nested grouping. Default: `--per day --per model`. |
 | `--order <order>` | Sort: `asc` (default) or `desc`. |
 
 Two-level grouping creates parent-child rows, e.g. `--per day --per model` shows each day with per-model breakdowns.
@@ -268,6 +268,12 @@ ccost --per month --output csv --filename usage.csv
 # Two-level: project > model
 ccost --per project --per model --table full
 
+# Subagent cost breakdown
+ccost --per subagent --cost decimal
+
+# Session > subagent: see subagent cost within each session
+ccost --per session --per subagent
+
 # Copy JSON to clipboard
 ccost --copy json
 
@@ -342,7 +348,7 @@ struct LoadOptions {
     session: Option<String>,
 }
 
-enum GroupDimension { Day, Hour, Month, Session, Project, Model }
+enum GroupDimension { Day, Hour, Month, Session, Project, Model, Subagent }
 
 struct GroupedData {
     label: String,
@@ -380,7 +386,7 @@ Reads JSONL conversation logs from Claude Code's local storage:
 - `~/.claude/projects/*/` (session files and `subagents/`)
 - `~/.config/claude/projects/*/` (alternate location)
 
-Both are scanned and deduplicated via symlink detection. Subagent transcripts are found in both the old (`<project>/subagents/`) and new (`<project>/<session-uuid>/subagents/`) directory structures.
+Both are scanned and deduplicated via symlink detection. Subagent transcripts are found in both the old (`<project>/subagents/`) and new (`<project>/<session-uuid>/subagents/`) directory structures. Each record carries an `agent_id` (the subagent file stem, or empty for the main session), enabling `--per subagent` grouping.
 
 ### Deduplication
 

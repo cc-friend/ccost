@@ -723,6 +723,7 @@ mod tests {
             model: "test".to_string(),
             session_id: "s1".to_string(),
             project: "p1".to_string(),
+            agent_id: String::new(),
             input_tokens: tokens,
             output_tokens: tokens,
             cache_creation_tokens: 0,

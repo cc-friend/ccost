@@ -46,7 +46,7 @@ ccost sl --chart 5h                      # 速率限制图表
 
 | 参数 | 说明 |
 |------|------|
-| `--per <dim>` | 分组维度：`day`、`hour`、`month`、`session`、`project`、`model`。最多指定2个做嵌套分组。默认 `--per day --per model`。 |
+| `--per <dim>` | 分组维度：`day`、`hour`、`month`、`session`、`project`、`model`、`subagent`。最多指定2个做嵌套分组。默认 `--per day --per model`。 |
 | `--order <order>` | 排序：`asc`（默认）或 `desc`。 |
 
 两级分组生成父子行，如 `--per day --per model` 每天下面展开各模型明细。
@@ -266,6 +266,12 @@ ccost --per month --output csv --filename usage.csv
 # 两级分组：项目 > 模型
 ccost --per project --per model --table full
 
+# 子代理费用分析
+ccost --per subagent --cost decimal
+
+# 会话 > 子代理：查看每个会话中子代理的费用
+ccost --per session --per subagent
+
 # 复制 JSON 到剪贴板
 ccost --copy json
 
@@ -340,7 +346,7 @@ struct LoadOptions {
     session: Option<String>,
 }
 
-enum GroupDimension { Day, Hour, Month, Session, Project, Model }
+enum GroupDimension { Day, Hour, Month, Session, Project, Model, Subagent }
 
 struct GroupedData {
     label: String,
@@ -378,7 +384,7 @@ struct GroupedData {
 - `~/.claude/projects/*/`（会话文件和 `subagents/` 子目录）
 - `~/.config/claude/projects/*/`（备用位置）
 
-两个位置都会扫描，通过符号链接检测去重。
+两个位置都会扫描，通过符号链接检测去重。子代理转录文件同时支持旧结构（`<project>/subagents/`）和新结构（`<project>/<session-uuid>/subagents/`）。每条记录携带 `agent_id`（子代理文件名，主会话为空），支持 `--per subagent` 分组。
 
 ### 去重
 

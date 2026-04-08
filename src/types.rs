@@ -8,6 +8,7 @@ pub struct TokenRecord {
     pub model: String,
     pub session_id: String,
     pub project: String,
+    pub agent_id: String,
     pub input_tokens: u64,
     pub output_tokens: u64,
     pub cache_creation_tokens: u64,
@@ -20,6 +21,7 @@ pub struct PricedTokenRecord {
     pub model: String,
     pub session_id: String,
     pub project: String,
+    pub agent_id: String,
     pub input_tokens: u64,
     pub output_tokens: u64,
     pub cache_creation_tokens: u64,
@@ -44,6 +46,7 @@ impl PricedTokenRecord {
             model: record.model.clone(),
             session_id: record.session_id.clone(),
             project: record.project.clone(),
+            agent_id: record.agent_id.clone(),
             input_tokens: record.input_tokens,
             output_tokens: record.output_tokens,
             cache_creation_tokens: record.cache_creation_tokens,
@@ -99,6 +102,7 @@ pub enum GroupDimension {
     Session,
     Project,
     Model,
+    Subagent,
 }
 
 impl std::str::FromStr for GroupDimension {
@@ -111,6 +115,7 @@ impl std::str::FromStr for GroupDimension {
             "session" => Ok(Self::Session),
             "project" => Ok(Self::Project),
             "model" => Ok(Self::Model),
+            "subagent" => Ok(Self::Subagent),
             _ => Err(format!("invalid group dimension: '{}'", s)),
         }
     }
@@ -125,6 +130,7 @@ impl GroupDimension {
             Self::Session => "session",
             Self::Project => "project",
             Self::Model => "model",
+            Self::Subagent => "subagent",
         }
     }
 
@@ -136,11 +142,14 @@ impl GroupDimension {
             Self::Session => "Session",
             Self::Project => "Project",
             Self::Model => "Model",
+            Self::Subagent => "Subagent",
         }
     }
 
     pub fn all_valid() -> &'static [&'static str] {
-        &["day", "hour", "month", "session", "project", "model"]
+        &[
+            "day", "hour", "month", "session", "project", "model", "subagent",
+        ]
     }
 }
 

@@ -42,7 +42,7 @@ fn print_help() {
     let help = r#"Usage: ccost [options]
 
 Options:
-  --per <dim>           Group by dimension: day, hour, month, session, project, model
+  --per <dim>           Group by dimension: day, hour, month, session, project, model, subagent
                         Can be specified multiple times. Max 2 values.
                         Default: --per day --per model
   --from <date>         Start date (YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS)
