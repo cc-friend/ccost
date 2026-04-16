@@ -1,5 +1,5 @@
 {
-  "fetchedAt": "2026-04-07T10:54:04.499Z",
+  "fetchedAt": "2026-04-16T21:17:33.547Z",
   "models": {
     "MiniMax-M2": {
       "cacheCreationCostPerToken": 3.75e-7,
@@ -116,6 +116,12 @@
       "outputCostPerToken": 0.000025
     },
     "claude-opus-4-6": {
+      "cacheCreationCostPerToken": 6.25e-6,
+      "cacheReadCostPerToken": 5e-7,
+      "inputCostPerToken": 5e-6,
+      "outputCostPerToken": 0.000025
+    },
+    "claude-opus-4-7": {
       "cacheCreationCostPerToken": 6.25e-6,
       "cacheReadCostPerToken": 5e-7,
       "inputCostPerToken": 5e-6,
