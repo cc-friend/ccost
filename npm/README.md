@@ -379,7 +379,7 @@ struct GroupedData {
 | `format_txt()` | Same table, no colors |
 | `format_json()` | JSON with `meta`, `data`, `totals`, `dedup` |
 | `format_markdown()` | GFM Markdown table |
-| `format_html()` | Self-contained HTML with sortable columns |
+| `format_html()` | Self-contained HTML with sortable columns, light/dark toggle, and print-friendly CSS |
 | `format_csv()` | RFC 4180 CSV |
 | `format_tsv()` | Tab-separated values |
 | `render_chart()` | Braille line chart |
