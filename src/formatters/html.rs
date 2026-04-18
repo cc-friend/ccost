@@ -70,8 +70,8 @@ fn build_row_html(
 }
 
 pub fn format_html(data: &[GroupedData], totals: &GroupedData, options: &HtmlOptions) -> String {
-    let title = options.title.as_deref().unwrap_or("ccost report");
     let is_default_title = options.title.is_none();
+    let title = options.title.as_deref().unwrap_or("Report by ccost");
 
     let headers: Vec<&str> = if options.compact {
         vec![&options.dimension_label, "Input Total", "Output", "Total"]
@@ -94,15 +94,18 @@ pub fn format_html(data: &[GroupedData], totals: &GroupedData, options: &HtmlOpt
     // DOCTYPE and head
     html.push_str("<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"UTF-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n<title>");
     html.push_str(&html_escape(title));
-    html.push_str("</title>\n<style>\n");
+    html.push_str("</title>\n<script>");
+    html.push_str(THEME_BOOT_JS);
+    html.push_str("</script>\n<style>\n");
     html.push_str(CSS);
     html.push_str("\n</style>\n</head>\n<body>\n");
 
+    // Theme toggle
+    html.push_str("<button id=\"theme-toggle\" class=\"theme-toggle\" type=\"button\" aria-label=\"Toggle theme\">Light</button>\n");
+
     // h1
     if is_default_title {
-        html.push_str("<h1><a href=\"https://github.com/cc-friend/ccost\">");
-        html.push_str(&html_escape(title));
-        html.push_str("</a></h1>\n");
+        html.push_str("<h1>Report by <a href=\"https://github.com/cc-friend/ccost\" target=\"_blank\" rel=\"noopener noreferrer\">ccost</a></h1>\n");
     } else {
         html.push_str("<h1>");
         html.push_str(&html_escape(title));
@@ -189,28 +192,81 @@ pub fn format_html(data: &[GroupedData], totals: &GroupedData, options: &HtmlOpt
     html
 }
 
-const CSS: &str = r#"* {
+const THEME_BOOT_JS: &str = r#"(function(){try{var s=localStorage.getItem('ccost-theme');if(s==='light'||s==='dark'){document.documentElement.setAttribute('data-theme',s);}else if(window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches){document.documentElement.setAttribute('data-theme','light');}}catch(e){}})();"#;
+
+const CSS: &str = r#":root {
+  color-scheme: dark;
+  --bg: #0d1117;
+  --text: #c9d1d9;
+  --accent: #58a6ff;
+  --border: #30363d;
+  --thead-bg: #161b22;
+  --thead-hover: #1f252c;
+  --parent-bg: #1a1f26;
+  --parent-hover: #22272e;
+  --child-bg: #161b22;
+  --totals-bg: #1f252c;
+  --cost: #3fb950;
+  --arrow: #6e7681;
+}
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #ffffff;
+  --text: #24292f;
+  --accent: #0969da;
+  --border: #d0d7de;
+  --thead-bg: #f6f8fa;
+  --thead-hover: #eaeef2;
+  --parent-bg: #ffffff;
+  --parent-hover: #f6f8fa;
+  --child-bg: #f6f8fa;
+  --totals-bg: #eaeef2;
+  --cost: #1a7f37;
+  --arrow: #8c959f;
+}
+* {
   margin: 0;
   padding: 0;
   box-sizing: border-box;
 }
 body {
-  background: #1a1816;
-  color: #e0e0e0;
+  background: var(--bg);
+  color: var(--text);
   font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
   padding: 2rem;
 }
 h1 {
-  color: #D4795A;
+  color: var(--text);
   margin-bottom: 1.5rem;
   font-size: 1.5rem;
 }
+a {
+  color: #CC5B4F;
+  text-decoration: underline;
+  transition: opacity 0.2s;
+}
+a:hover {
+  opacity: 0.65;
+}
 h1 a {
-  color: #D4795A;
   text-decoration: none;
 }
-h1 a:hover {
-  text-decoration: underline;
+.theme-toggle {
+  position: fixed;
+  top: 1rem;
+  right: 1rem;
+  background: var(--thead-bg);
+  color: var(--accent);
+  border: 1px solid var(--border);
+  padding: 0.35rem 0.7rem;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.8rem;
+  font-family: inherit;
+  z-index: 10;
+}
+.theme-toggle:hover {
+  background: var(--thead-hover);
 }
 table {
   border-collapse: collapse;
@@ -219,44 +275,44 @@ table {
 }
 th, td {
   padding: 0.6rem 1rem;
-  border: 1px solid #333;
+  border: 1px solid var(--border);
   text-align: right;
 }
 th:first-child, td:first-child {
   text-align: left;
 }
 thead th {
-  background: #2a2520;
-  color: #D4795A;
+  background: var(--thead-bg);
+  color: var(--accent);
   cursor: pointer;
   user-select: none;
   white-space: nowrap;
 }
 thead th:hover {
-  background: #3a3530;
+  background: var(--thead-hover);
 }
 tbody, tfoot {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', monospace;
 }
 tbody tr.parent {
-  background: #222;
+  background: var(--parent-bg);
 }
 tbody tr.parent:hover {
-  background: #2a2a2a;
+  background: var(--parent-hover);
 }
 tbody tr.child {
-  background: #1e1e1e;
+  background: var(--child-bg);
   font-size: 0.85rem;
 }
 tbody tr.child td:first-child {
   padding-left: 2rem;
 }
 tfoot tr.totals {
-  background: #2a2520;
+  background: var(--totals-bg);
   font-weight: bold;
 }
 tfoot tr.totals-main {
-  color: #D4795A;
+  color: var(--accent);
 }
 tfoot tr.totals-child {
   font-weight: normal;
@@ -266,7 +322,7 @@ tfoot tr.totals-child td:first-child {
   padding-left: 2rem;
 }
 .cost {
-  color: #6ee7b7;
+  color: var(--cost);
   font-size: 0.85em;
 }
 .sort-arrow {
@@ -278,18 +334,77 @@ tfoot tr.totals-child td:first-child {
   display: block;
 }
 .arrow-up, .arrow-down {
-  fill: #555;
+  fill: var(--arrow);
   transition: fill 0.2s;
 }
 th.sort-asc .arrow-up {
-  fill: #D4795A;
+  fill: var(--accent);
 }
 th.sort-desc .arrow-down {
-  fill: #D4795A;
+  fill: var(--accent);
+}
+@media print {
+  :root, :root[data-theme="light"], :root[data-theme="dark"] {
+    --bg: #ffffff;
+    --text: #000000;
+    --accent: #000000;
+    --border: #999999;
+    --thead-bg: #eeeeee;
+    --thead-hover: #eeeeee;
+    --parent-bg: #ffffff;
+    --parent-hover: #ffffff;
+    --child-bg: #f6f6f6;
+    --totals-bg: #dddddd;
+    --cost: #555555;
+    --arrow: transparent;
+  }
+  body {
+    padding: 0;
+    font-size: 11pt;
+  }
+  h1 {
+    font-size: 14pt;
+    margin-bottom: 0.5rem;
+  }
+  table {
+    font-size: 9.5pt;
+  }
+  thead th {
+    cursor: default;
+  }
+  thead {
+    display: table-header-group;
+  }
+  tr {
+    page-break-inside: avoid;
+  }
+  a {
+    color: inherit;
+    text-decoration: none;
+  }
+  .theme-toggle, .sort-arrow {
+    display: none;
+  }
 }"#;
 
 fn build_js(_num_cols: usize) -> String {
     r#"(function() {
+  const root = document.documentElement;
+  const btn = document.getElementById('theme-toggle');
+  if (btn) {
+    function refreshLabel() {
+      const cur = root.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
+      btn.textContent = cur === 'light' ? 'Dark' : 'Light';
+    }
+    refreshLabel();
+    btn.addEventListener('click', () => {
+      const next = root.getAttribute('data-theme') === 'light' ? 'dark' : 'light';
+      root.setAttribute('data-theme', next);
+      try { localStorage.setItem('ccost-theme', next); } catch(e) {}
+      refreshLabel();
+    });
+  }
+
   const table = document.querySelector('table');
   const thead = table.querySelector('thead');
   const tbody = table.querySelector('tbody');
@@ -440,8 +555,11 @@ mod tests {
 
         let result = format_html(&data, &totals, &options);
         assert!(result.contains("<!DOCTYPE html>"));
-        assert!(result.contains("ccost report"));
-        assert!(result.contains("https://github.com/cc-friend/ccost"));
+        assert!(result.contains("Report by <a"));
+        assert!(result.contains("href=\"https://github.com/cc-friend/ccost\""));
+        assert!(result.contains("target=\"_blank\""));
+        assert!(result.contains("rel=\"noopener noreferrer\""));
+        assert!(result.contains(">ccost</a>"));
         assert!(result.contains("<thead>"));
         assert!(result.contains("<tbody>"));
         assert!(result.contains("<tfoot>"));
@@ -497,8 +615,72 @@ mod tests {
     fn test_html_css_cost_color() {
         let html = CSS;
         assert!(
-            html.contains(".cost {") && html.contains("color: #6ee7b7;"),
-            "cost spans should use color #6ee7b7"
+            html.contains("--cost: #3fb950;"),
+            "dark theme --cost should be #3fb950"
+        );
+        assert!(
+            html.contains(".cost {") && html.contains("color: var(--cost);"),
+            "cost spans should reference the --cost variable"
+        );
+    }
+
+    #[test]
+    fn test_html_theme_toggle_present() {
+        let data = vec![];
+        let totals = GroupedData {
+            label: "TOTAL".to_string(),
+            input_tokens: 0,
+            output_tokens: 0,
+            cache_creation_tokens: 0,
+            cache_read_tokens: 0,
+            input_cost: 0.0,
+            cache_creation_cost: 0.0,
+            cache_read_cost: 0.0,
+            output_cost: 0.0,
+            total_cost: 0.0,
+            children: None,
+        };
+        let options = HtmlOptions {
+            dimension_label: "Day".to_string(),
+            price_mode: PriceMode::Off,
+            compact: true,
+            title: None,
+        };
+        let result = format_html(&data, &totals, &options);
+        assert!(
+            result.contains("id=\"theme-toggle\""),
+            "should render theme toggle button"
+        );
+        assert!(
+            result.contains("ccost-theme"),
+            "should persist theme choice via localStorage key 'ccost-theme'"
+        );
+        assert!(
+            result.contains("prefers-color-scheme: light"),
+            "should honor OS-level light-mode preference"
+        );
+    }
+
+    #[test]
+    fn test_html_css_print_rules() {
+        let html = CSS;
+        assert!(html.contains("@media print"), "should include @media print");
+        assert!(
+            html.contains(".theme-toggle, .sort-arrow {") && html.contains("display: none;"),
+            "toggle and sort arrows should be hidden when printing"
+        );
+        assert!(
+            html.contains("page-break-inside: avoid;"),
+            "rows should avoid splitting across pages"
+        );
+    }
+
+    #[test]
+    fn test_html_css_light_theme_vars() {
+        let html = CSS;
+        assert!(
+            html.contains(":root[data-theme=\"light\"]"),
+            "light theme should be selectable via data-theme='light'"
         );
     }
 

@@ -545,6 +545,19 @@ pub fn load_records(options: &LoadOptions) -> LoadResult {
         all_files.append(&mut files);
     }
 
+    // Optional file-level pre-filter: keep only JSONL files whose
+    // owning session UUID is in `options.session_files`. Uses the
+    // same `extract_session_and_agent` rule that downstream code
+    // applies, so a session id pulls in main + subagent files
+    // transparently.
+    if let Some(wanted) = options.session_files.as_deref() {
+        let wanted: HashSet<&str> = wanted.iter().map(String::as_str).collect();
+        all_files.retain(|file_path| {
+            let (session_id, _agent_id) = extract_session_and_agent(file_path);
+            wanted.contains(session_id.as_str())
+        });
+    }
+
     // Step 3: Parallel parse & pre-filter using lightweight RawRecord (skips message.content)
     struct FileInfo {
         file_mtime: DateTime<Utc>,
@@ -577,11 +590,16 @@ pub fn load_records(options: &LoadOptions) -> LoadResult {
             let mut line_number: u32 = 0;
 
             for line in content.lines() {
+                // Physical line numbering: every line counts, including
+                // empty lines and lines that fail to parse. This keeps
+                // `TokenRecord.line` in sync with `vim +N`, `sed -n 'Np'`,
+                // GitHub blob `#LN`, and any external join key keyed on
+                // physical line number.
+                line_number += 1;
                 let line = line.trim();
                 if line.is_empty() {
                     continue;
                 }
-                line_number += 1;
 
                 let rec: RawRecord = match serde_json::from_str(line) {
                     Ok(r) => r,
@@ -837,6 +855,9 @@ pub fn load_records(options: &LoadOptions) -> LoadResult {
             .map(extract_tool_names)
             .unwrap_or_default();
 
+        let message_id = rec.message.as_ref().and_then(|m| m.id.clone());
+        let request_id = rec.request_id.clone();
+
         filtered_records.push(TokenRecord {
             timestamp: tr.timestamp,
             model: model_owned,
@@ -849,6 +870,8 @@ pub fn load_records(options: &LoadOptions) -> LoadResult {
             output_tokens,
             cache_creation_tokens,
             cache_read_tokens,
+            message_id,
+            request_id,
         });
     }
 
@@ -868,27 +891,54 @@ pub fn load_records(options: &LoadOptions) -> LoadResult {
 }
 
 /// Discover project directories based on LoadOptions.
+///
+/// When `options.project_dirs` is `Some(list)`, the discovery is
+/// scoped: only the named encoded subdirectories under each candidate
+/// `projects/` root are returned, and `find_jsonl_files` will only
+/// walk those. Names that don't exist on disk are silently skipped
+/// (callers passing a stale or speculative list shouldn't error out).
+/// An explicit empty `Vec` means "load nothing" — return no dirs.
 fn discover_project_dirs(options: &LoadOptions) -> Vec<PathBuf> {
-    let mut candidate_dirs: Vec<PathBuf> = Vec::new();
+    let mut projects_roots: Vec<PathBuf> = Vec::new();
 
     if let Some(ref claude_dir) = options.claude_dir {
         let projects_dir = PathBuf::from(claude_dir).join("projects");
         if projects_dir.is_dir() {
-            candidate_dirs.push(projects_dir);
+            projects_roots.push(projects_dir);
         }
     } else {
         // Default locations
         if let Some(home) = dirs::home_dir() {
             let dir1 = home.join(".claude").join("projects");
             if dir1.is_dir() {
-                candidate_dirs.push(dir1);
+                projects_roots.push(dir1);
             }
             let dir2 = home.join(".config").join("claude").join("projects");
             if dir2.is_dir() {
-                candidate_dirs.push(dir2);
+                projects_roots.push(dir2);
             }
         }
     }
+
+    // Apply directory-level pre-filter when callers specified the list
+    // of projects to load. Each `projects_root` becomes one or more
+    // child directories instead of the root itself; non-existent
+    // children are silently skipped.
+    let candidate_dirs: Vec<PathBuf> = match options.project_dirs.as_deref() {
+        Some(names) => {
+            let mut out = Vec::with_capacity(names.len());
+            for root in &projects_roots {
+                for name in names {
+                    let child = root.join(name);
+                    if child.is_dir() {
+                        out.push(child);
+                    }
+                }
+            }
+            out
+        }
+        None => projects_roots,
+    };
 
     // Deduplicate via canonicalize
     let mut seen: HashSet<PathBuf> = HashSet::new();

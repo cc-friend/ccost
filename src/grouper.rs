@@ -307,6 +307,8 @@ mod tests {
             output_tokens: 50,
             cache_creation_tokens: 0,
             cache_read_tokens: 0,
+            message_id: None,
+            request_id: None,
             input_cost: 0.01,
             cache_creation_cost: 0.0,
             cache_read_cost: 0.0,

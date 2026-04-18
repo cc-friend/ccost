@@ -805,6 +805,7 @@ mod tests {
 
     // ─── SlRecord test helper ─────────────────────────────────────────────────
 
+    #[allow(clippy::too_many_arguments)]
     fn make_record(
         ts_secs: i64,
         session_id: &str,
@@ -837,6 +838,7 @@ mod tests {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn make_session_summary(
         session_id: &str,
         project: &str,

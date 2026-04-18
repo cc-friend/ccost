@@ -730,6 +730,8 @@ mod tests {
             output_tokens: tokens,
             cache_creation_tokens: 0,
             cache_read_tokens: 0,
+            message_id: None,
+            request_id: None,
             input_cost: total_cost / 2.0,
             cache_creation_cost: 0.0,
             cache_read_cost: 0.0,

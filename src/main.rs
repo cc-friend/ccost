@@ -15,6 +15,19 @@ fn write_output(filename: &str, content: &str) -> std::io::Result<()> {
     }
 }
 
+/// Parse a comma-separated CLI flag value into the `Vec<String>` shape
+/// expected by `LoadOptions.project_dirs` / `session_files`. Trims
+/// whitespace around each item and drops empties so users can be
+/// sloppy with `--project-dirs " a , b , "`.
+fn parse_csv_arg(raw: Option<&String>) -> Option<Vec<String>> {
+    raw.map(|s| {
+        s.split(',')
+            .map(|p| p.trim().to_string())
+            .filter(|p| !p.is_empty())
+            .collect()
+    })
+}
+
 use regex::Regex;
 
 use ccost::formatters::chart::{
@@ -90,6 +103,22 @@ fn build_command() -> Command {
         .arg(Arg::new("project").long("project").value_name("name"))
         .arg(Arg::new("model").long("model").value_name("name"))
         .arg(Arg::new("session").long("session").value_name("id"))
+        .arg(
+            Arg::new("project-dirs")
+                .long("project-dirs")
+                .value_name("encoded_dirs")
+                // Encoded project dir names start with `-` (e.g.
+                // `-home-user-proj`); clap defaults reject values
+                // beginning with hyphens because they look like flags.
+                .allow_hyphen_values(true)
+                .help("Comma-separated encoded project dir names (e.g. -home-user-proj). Pre-filters discovery — non-listed projects are not read at all."),
+        )
+        .arg(
+            Arg::new("session-files")
+                .long("session-files")
+                .value_name("uuids")
+                .help("Comma-separated session UUIDs. Pre-filters at the file level — non-listed session files are not read at all."),
+        )
         .arg(Arg::new("cost").long("cost").value_name("mode"))
         .arg(Arg::new("5hfrom").long("5hfrom").value_name("datetime"))
         .arg(Arg::new("5hto").long("5hto").value_name("datetime"))
@@ -145,6 +174,21 @@ fn build_sl_subcommand() -> Command {
         .arg(Arg::new("session").long("session").value_name("id"))
         .arg(Arg::new("project").long("project").value_name("name"))
         .arg(Arg::new("model").long("model").value_name("name"))
+        .arg(
+            Arg::new("project-dirs")
+                .long("project-dirs")
+                .value_name("encoded_dirs")
+                // Encoded project dir names begin with `-`, which clap
+                // rejects by default. Allow hyphen-leading values.
+                .allow_hyphen_values(true)
+                .help("Comma-separated encoded project dir names. Pre-filters discovery — non-listed projects are not read."),
+        )
+        .arg(
+            Arg::new("session-files")
+                .long("session-files")
+                .value_name("uuids")
+                .help("Comma-separated session UUIDs. Pre-filters at the file level — non-listed session files are not read."),
+        )
         .arg(Arg::new("cost").long("cost").value_name("mode"))
         .arg(Arg::new("output").long("output").value_name("format"))
         .arg(Arg::new("filename").long("filename").value_name("path"))
@@ -446,6 +490,8 @@ fn main() {
         project: matches.get_one::<String>("project").cloned(),
         model: matches.get_one::<String>("model").cloned(),
         session: matches.get_one::<String>("session").cloned(),
+        project_dirs: parse_csv_arg(matches.get_one::<String>("project-dirs")),
+        session_files: parse_csv_arg(matches.get_one::<String>("session-files")),
     };
 
     let load_result = load_records(&load_opts);
@@ -1467,6 +1513,8 @@ fn compute_cost_diffs(
         project: matches.get_one::<String>("project").cloned(),
         model: matches.get_one::<String>("model").cloned(),
         session: matches.get_one::<String>("session").cloned(),
+        project_dirs: parse_csv_arg(matches.get_one::<String>("project-dirs")),
+        session_files: parse_csv_arg(matches.get_one::<String>("session-files")),
     };
 
     let load_result = load_records(&load_opts);

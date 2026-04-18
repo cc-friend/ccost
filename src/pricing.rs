@@ -43,17 +43,32 @@ pub fn load_pricing_from_file(file_path: &str) -> Result<PricingData, Box<dyn st
 
 /// Fetch live pricing data from the LiteLLM repository on GitHub.
 ///
-/// Filters for models from supported providers (Anthropic, MiniMax, Kimi, GLM),
-/// normalizes keys by stripping provider prefixes, and maps cost fields.
+/// Thin IO wrapper over [`parse_litellm_pricing`] — fetches the
+/// upstream JSON and hands it off. Kept tiny so almost all of the
+/// "interesting" logic lives in the pure parser, which is unit-tested
+/// against synthetic LiteLLM JSON without any network dependency.
 pub fn fetch_live_pricing() -> Result<PricingData, Box<dyn std::error::Error>> {
     let url = "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json";
     let resp = minreq::get(url).send()?;
     let raw: serde_json::Value = serde_json::from_str(resp.as_str()?)?;
+    parse_litellm_pricing(&raw)
+}
 
+/// Parse a LiteLLM `model_prices_and_context_window.json`-shaped JSON
+/// value into a `PricingData`. Pure function — no IO, no network.
+///
+/// Filters: only models whose key starts with one of `SUPPORTED_PREFIXES`
+/// (Anthropic / MiniMax / Moonshot / Zai). Provider prefix is stripped,
+/// then any trailing version suffix (`-v1`, `-v2:0`) is removed and
+/// `@date` is normalized to `-date`. First match per normalized name
+/// wins. Models lacking `input_cost_per_token` are skipped silently —
+/// upstream sometimes lists models with only context-window data.
+pub fn parse_litellm_pricing(
+    raw: &serde_json::Value,
+) -> Result<PricingData, Box<dyn std::error::Error>> {
     let obj = raw.as_object().ok_or("Expected top-level JSON object")?;
 
     let version_suffix_re = &*VERSION_SUFFIX_RE;
-
     let mut models: HashMap<String, ModelPricing> = HashMap::new();
 
     for (key, value) in obj.iter() {
@@ -435,6 +450,8 @@ mod tests {
             output_tokens: 500,
             cache_creation_tokens: 100,
             cache_read_tokens: 200,
+            message_id: None,
+            request_id: None,
         }];
 
         let priced = calculate_cost(&records, Some(&pricing));
@@ -462,6 +479,8 @@ mod tests {
             output_tokens: 500,
             cache_creation_tokens: 0,
             cache_read_tokens: 0,
+            message_id: None,
+            request_id: None,
         }];
 
         let priced = calculate_cost(&records, Some(&pricing));
@@ -492,6 +511,8 @@ mod tests {
             output_tokens: 500,
             cache_creation_tokens: 0,
             cache_read_tokens: 0,
+            message_id: None,
+            request_id: None,
         }];
 
         // pricing = None should load bundled
@@ -517,6 +538,8 @@ mod tests {
                 output_tokens: 500,
                 cache_creation_tokens: 0,
                 cache_read_tokens: 0,
+                message_id: None,
+                request_id: None,
             },
             TokenRecord {
                 timestamp: chrono::Utc::now(),
@@ -530,6 +553,8 @@ mod tests {
                 output_tokens: 1000,
                 cache_creation_tokens: 0,
                 cache_read_tokens: 0,
+                message_id: None,
+                request_id: None,
             },
         ];
 
@@ -557,6 +582,8 @@ mod tests {
                 output_tokens: 50,
                 cache_creation_tokens: 0,
                 cache_read_tokens: 0,
+                message_id: None,
+                request_id: None,
             },
             TokenRecord {
                 timestamp: chrono::Utc::now(),
@@ -570,6 +597,8 @@ mod tests {
                 output_tokens: 100,
                 cache_creation_tokens: 0,
                 cache_read_tokens: 0,
+                message_id: None,
+                request_id: None,
             },
         ];
 
@@ -599,9 +628,11 @@ mod tests {
             output_tokens: 456,
             cache_creation_tokens: 78,
             cache_read_tokens: 90,
+            message_id: None,
+            request_id: None,
         };
         let pricing = load_pricing();
-        let priced = calculate_cost(&[record.clone()], Some(&pricing));
+        let priced = calculate_cost(std::slice::from_ref(&record), Some(&pricing));
 
         assert_eq!(priced.len(), 1);
         let p = &priced[0];
@@ -655,6 +686,260 @@ mod tests {
             cost == 0.01 || cost == 0.003,
             "matched cost should be one of the two known models"
         );
+    }
+
+    // ── parse_litellm_pricing tests ─────────────────────────────────────
+    //
+    // The pure parsing logic of `fetch_live_pricing` lives here so it
+    // can be exercised without HTTPS to GitHub. Each case feeds in a
+    // synthetic LiteLLM-shaped JSON and asserts the resulting
+    // `PricingData.models` contents.
+
+    fn json_obj(pairs: &[(&str, serde_json::Value)]) -> serde_json::Value {
+        let mut map = serde_json::Map::new();
+        for (k, v) in pairs {
+            map.insert((*k).to_string(), v.clone());
+        }
+        serde_json::Value::Object(map)
+    }
+
+    fn model_value(input: f64, output: f64, cc: f64, cr: f64) -> serde_json::Value {
+        serde_json::json!({
+            "input_cost_per_token": input,
+            "output_cost_per_token": output,
+            "cache_creation_input_token_cost": cc,
+            "cache_read_input_token_cost": cr,
+        })
+    }
+
+    #[test]
+    fn test_parse_litellm_anthropic_prefix() {
+        let raw = json_obj(&[(
+            "anthropic.claude-opus-4-6",
+            model_value(15.0e-6, 75.0e-6, 0.0, 0.0),
+        )]);
+        let pricing = parse_litellm_pricing(&raw).unwrap();
+        // Provider prefix `anthropic.` stripped.
+        assert!(pricing.models.contains_key("claude-opus-4-6"));
+        assert!((pricing.models["claude-opus-4-6"].input_cost_per_token - 15.0e-6).abs() < 1e-12);
+        assert!((pricing.models["claude-opus-4-6"].output_cost_per_token - 75.0e-6).abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_parse_litellm_minimax_prefix() {
+        let raw = json_obj(&[("minimax/MiniMax-M2.7", model_value(0.001, 0.002, 0.0, 0.0))]);
+        let pricing = parse_litellm_pricing(&raw).unwrap();
+        assert!(pricing.models.contains_key("MiniMax-M2.7"));
+    }
+
+    #[test]
+    fn test_parse_litellm_moonshot_kimi_prefix() {
+        let raw = json_obj(&[(
+            "moonshot/kimi-k2-thinking",
+            model_value(0.001, 0.002, 0.0, 0.0),
+        )]);
+        let pricing = parse_litellm_pricing(&raw).unwrap();
+        assert!(pricing.models.contains_key("kimi-k2-thinking"));
+    }
+
+    #[test]
+    fn test_parse_litellm_zai_glm_prefix() {
+        let raw = json_obj(&[("zai/glm-4.7", model_value(0.0005, 0.001, 0.0, 0.0))]);
+        let pricing = parse_litellm_pricing(&raw).unwrap();
+        assert!(pricing.models.contains_key("glm-4.7"));
+    }
+
+    #[test]
+    fn test_parse_litellm_skips_unsupported_provider() {
+        // Models from providers we don't track (e.g. openai, azure)
+        // must not appear in the output.
+        let raw = json_obj(&[
+            ("openai/gpt-4o", model_value(0.005, 0.015, 0.0, 0.0)),
+            (
+                "gemini/gemini-2.5-pro",
+                model_value(0.0035, 0.0105, 0.0, 0.0),
+            ),
+            (
+                "anthropic.claude-opus-4-6",
+                model_value(15.0e-6, 75.0e-6, 0.0, 0.0),
+            ),
+        ]);
+        let pricing = parse_litellm_pricing(&raw).unwrap();
+        assert_eq!(pricing.models.len(), 1, "only Anthropic model kept");
+        assert!(pricing.models.contains_key("claude-opus-4-6"));
+    }
+
+    #[test]
+    fn test_parse_litellm_skips_models_without_input_cost() {
+        // Some upstream entries carry only context-window data (no
+        // pricing). Skip them silently — they'd render as $0/token.
+        let raw = json_obj(&[
+            (
+                "anthropic.claude-opus-4-6",
+                serde_json::json!({"max_tokens": 200000, "max_input_tokens": 200000}),
+            ),
+            (
+                "anthropic.claude-sonnet-4",
+                model_value(3.0e-6, 15.0e-6, 0.0, 0.0),
+            ),
+        ]);
+        let pricing = parse_litellm_pricing(&raw).unwrap();
+        assert_eq!(pricing.models.len(), 1);
+        assert!(!pricing.models.contains_key("claude-opus-4-6"));
+        assert!(pricing.models.contains_key("claude-sonnet-4"));
+    }
+
+    #[test]
+    fn test_parse_litellm_skips_models_with_non_numeric_input_cost() {
+        // Defensive: upstream sometimes ships strings/nulls.
+        let raw = json_obj(&[
+            (
+                "anthropic.claude-opus-4-6",
+                serde_json::json!({"input_cost_per_token": "not-a-number"}),
+            ),
+            (
+                "anthropic.claude-sonnet-4",
+                serde_json::json!({"input_cost_per_token": null}),
+            ),
+            (
+                "anthropic.claude-haiku-4-5",
+                model_value(1.0e-6, 5.0e-6, 0.0, 0.0),
+            ),
+        ]);
+        let pricing = parse_litellm_pricing(&raw).unwrap();
+        assert_eq!(pricing.models.len(), 1);
+        assert!(pricing.models.contains_key("claude-haiku-4-5"));
+    }
+
+    #[test]
+    fn test_parse_litellm_strips_version_suffix_v1() {
+        // `-v1`, `-v2:0` etc. are AWS Bedrock revision tags. Normalize
+        // them away so multiple versions of the same model collapse.
+        let raw = json_obj(&[(
+            "anthropic.claude-opus-4-6-v1",
+            model_value(15.0e-6, 75.0e-6, 0.0, 0.0),
+        )]);
+        let pricing = parse_litellm_pricing(&raw).unwrap();
+        assert!(pricing.models.contains_key("claude-opus-4-6"));
+        assert!(!pricing.models.contains_key("claude-opus-4-6-v1"));
+    }
+
+    #[test]
+    fn test_parse_litellm_strips_version_suffix_with_colon() {
+        let raw = json_obj(&[(
+            "anthropic.claude-sonnet-4-v2:0",
+            model_value(3.0e-6, 15.0e-6, 0.0, 0.0),
+        )]);
+        let pricing = parse_litellm_pricing(&raw).unwrap();
+        assert!(pricing.models.contains_key("claude-sonnet-4"));
+    }
+
+    #[test]
+    fn test_parse_litellm_normalizes_at_to_dash_in_dates() {
+        // Anthropic API uses `claude-haiku-4-5@20251001`; LiteLLM keys
+        // sometimes use the `@` form, but ccost-internal canonical
+        // form uses `-` (matching what the JSONL emits).
+        let raw = json_obj(&[(
+            "anthropic.claude-haiku-4-5@20251001",
+            model_value(1.0e-6, 5.0e-6, 0.0, 0.0),
+        )]);
+        let pricing = parse_litellm_pricing(&raw).unwrap();
+        assert!(pricing.models.contains_key("claude-haiku-4-5-20251001"));
+        assert!(!pricing.models.contains_key("claude-haiku-4-5@20251001"));
+    }
+
+    #[test]
+    fn test_parse_litellm_first_match_per_normalized_name_wins() {
+        // After version stripping + @→- normalization, two upstream
+        // keys can collide. The first one in iteration order wins —
+        // we don't try to merge or pick "latest".
+        let raw = json_obj(&[
+            (
+                "anthropic.claude-opus-4-6",
+                model_value(15.0e-6, 75.0e-6, 0.0, 0.0),
+            ),
+            // Same normalized name (-v2 stripped) → skipped.
+            (
+                "anthropic.claude-opus-4-6-v2",
+                model_value(99.0e-6, 99.0e-6, 0.0, 0.0),
+            ),
+        ]);
+        let pricing = parse_litellm_pricing(&raw).unwrap();
+        assert_eq!(pricing.models.len(), 1);
+        let opus = &pricing.models["claude-opus-4-6"];
+        // The first entry's price wins; the -v2's 99.0e-6 must NOT
+        // appear (would indicate duplicate-merge bug).
+        assert!((opus.input_cost_per_token - 15.0e-6).abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_parse_litellm_optional_cost_fields_default_to_zero() {
+        // Only `input_cost_per_token` is required; everything else
+        // defaults to 0 if missing.
+        let raw = json_obj(&[(
+            "anthropic.claude-opus-4-6",
+            serde_json::json!({"input_cost_per_token": 15.0e-6}),
+        )]);
+        let pricing = parse_litellm_pricing(&raw).unwrap();
+        let opus = &pricing.models["claude-opus-4-6"];
+        assert_eq!(opus.output_cost_per_token, 0.0);
+        assert_eq!(opus.cache_creation_cost_per_token, 0.0);
+        assert_eq!(opus.cache_read_cost_per_token, 0.0);
+    }
+
+    #[test]
+    fn test_parse_litellm_top_level_not_object_returns_error() {
+        // Defensive: if upstream returns a JSON array or scalar, we
+        // surface the error instead of panicking.
+        let raw = serde_json::json!([1, 2, 3]);
+        assert!(parse_litellm_pricing(&raw).is_err());
+
+        let raw = serde_json::json!("string");
+        assert!(parse_litellm_pricing(&raw).is_err());
+    }
+
+    #[test]
+    fn test_parse_litellm_empty_object_yields_empty_pricing() {
+        let raw = json_obj(&[]);
+        let pricing = parse_litellm_pricing(&raw).unwrap();
+        assert!(pricing.models.is_empty());
+        // fetched_at still gets set to "now".
+        assert!(!pricing.fetched_at.is_empty());
+    }
+
+    #[test]
+    fn test_parse_litellm_realistic_mixed_input() {
+        // End-to-end shape: the kind of real LiteLLM JSON ccost would
+        // see in production — mix of supported, unsupported,
+        // version-suffixed, missing-cost.
+        let raw = json_obj(&[
+            (
+                "anthropic.claude-opus-4-6",
+                model_value(15.0e-6, 75.0e-6, 18.75e-6, 1.5e-6),
+            ),
+            (
+                "anthropic.claude-sonnet-4-v1",
+                model_value(3.0e-6, 15.0e-6, 3.75e-6, 0.3e-6),
+            ),
+            (
+                "anthropic.claude-haiku-4-5@20251001",
+                model_value(1.0e-6, 5.0e-6, 0.0, 0.0),
+            ),
+            ("openai/gpt-4o", model_value(5.0e-6, 15.0e-6, 0.0, 0.0)),
+            (
+                "anthropic.context-only-no-pricing",
+                serde_json::json!({"max_tokens": 200000}),
+            ),
+            ("zai/glm-4.7", model_value(0.5e-6, 1.0e-6, 0.0, 0.0)),
+        ]);
+        let pricing = parse_litellm_pricing(&raw).unwrap();
+        assert_eq!(pricing.models.len(), 4, "opus + sonnet + haiku + glm");
+        assert!(pricing.models.contains_key("claude-opus-4-6"));
+        assert!(pricing.models.contains_key("claude-sonnet-4"));
+        assert!(pricing.models.contains_key("claude-haiku-4-5-20251001"));
+        assert!(pricing.models.contains_key("glm-4.7"));
+        assert!(!pricing.models.contains_key("gpt-4o"));
+        assert!(!pricing.models.contains_key("context-only-no-pricing"));
     }
 
     #[test]

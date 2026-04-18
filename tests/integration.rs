@@ -2786,3 +2786,943 @@ fn test_per_session_per_tool_two_level() {
     assert!(child_labels.contains(&"Edit"));
     assert!(child_labels.contains(&"Read"));
 }
+
+// ---------------------------------------------------------------------------
+// Physical-line semantics (empty + parse-failure lines counted)
+// ---------------------------------------------------------------------------
+
+/// Write raw JSONL bytes verbatim under `projects/test-project/session-abc.jsonl`.
+/// Unlike `make_fixture`, the caller controls every byte of the file —
+/// including empty lines and intentionally malformed lines — so the
+/// physical-line-number tests can assert exact line numbering.
+fn make_raw_jsonl_fixture(jsonl: &str) -> TempDir {
+    let dir = TempDir::new().unwrap();
+    let proj_dir = dir.path().join("projects").join("test-project");
+    fs::create_dir_all(&proj_dir).unwrap();
+    fs::write(proj_dir.join("session-abc.jsonl"), jsonl).unwrap();
+    dir
+}
+
+#[test]
+fn test_line_field_counts_empty_lines_as_physical() {
+    // Physical layout:
+    //   line 1: valid record
+    //   line 2: (empty)
+    //   line 3: valid record
+    //   line 4: (empty)
+    //   line 5: valid record
+    let r1 = mock_rec(
+        "claude-opus-4-6",
+        100,
+        50,
+        0,
+        0,
+        "2026-03-23T10:00:00Z",
+        "r1",
+        "m1",
+    );
+    let r3 = mock_rec(
+        "claude-opus-4-6",
+        200,
+        80,
+        0,
+        0,
+        "2026-03-23T10:01:00Z",
+        "r3",
+        "m3",
+    );
+    let r5 = mock_rec(
+        "claude-opus-4-6",
+        300,
+        90,
+        0,
+        0,
+        "2026-03-23T10:02:00Z",
+        "r5",
+        "m5",
+    );
+    let jsonl = format!(
+        "{}\n\n{}\n\n{}",
+        serde_json::to_string(&r1).unwrap(),
+        serde_json::to_string(&r3).unwrap(),
+        serde_json::to_string(&r5).unwrap(),
+    );
+    let dir = make_raw_jsonl_fixture(&jsonl);
+    let opts = default_load_opts(dir.path());
+    let loaded = load_records(&opts);
+
+    assert_eq!(loaded.records.len(), 3);
+    assert_eq!(loaded.records[0].line, 1);
+    assert_eq!(
+        loaded.records[1].line, 3,
+        "physical line numbering must count the empty line 2"
+    );
+    assert_eq!(loaded.records[2].line, 5);
+}
+
+#[test]
+fn test_line_field_counts_parse_failure_lines_as_physical() {
+    // Physical layout:
+    //   line 1: valid record
+    //   line 2: garbage (JSON parse failure)
+    //   line 3: valid record
+    let r1 = mock_rec(
+        "claude-opus-4-6",
+        100,
+        50,
+        0,
+        0,
+        "2026-03-23T10:00:00Z",
+        "r1",
+        "m1",
+    );
+    let r3 = mock_rec(
+        "claude-opus-4-6",
+        200,
+        80,
+        0,
+        0,
+        "2026-03-23T10:01:00Z",
+        "r3",
+        "m3",
+    );
+    let jsonl = format!(
+        "{}\nthis is not valid json\n{}",
+        serde_json::to_string(&r1).unwrap(),
+        serde_json::to_string(&r3).unwrap(),
+    );
+    let dir = make_raw_jsonl_fixture(&jsonl);
+    let opts = default_load_opts(dir.path());
+    let loaded = load_records(&opts);
+
+    assert_eq!(loaded.records.len(), 2);
+    assert_eq!(loaded.records[0].line, 1);
+    assert_eq!(
+        loaded.records[1].line, 3,
+        "parse-failure line 2 still counts toward physical numbering"
+    );
+}
+
+#[test]
+fn test_line_field_counts_empty_and_parse_failure_combined() {
+    // Physical layout:
+    //   line 1: valid
+    //   line 2: empty
+    //   line 3: garbage
+    //   line 4: empty
+    //   line 5: valid
+    let r1 = mock_rec(
+        "claude-opus-4-6",
+        100,
+        50,
+        0,
+        0,
+        "2026-03-23T10:00:00Z",
+        "r1",
+        "m1",
+    );
+    let r5 = mock_rec(
+        "claude-opus-4-6",
+        200,
+        80,
+        0,
+        0,
+        "2026-03-23T10:01:00Z",
+        "r5",
+        "m5",
+    );
+    let jsonl = format!(
+        "{}\n\nnot json\n\n{}",
+        serde_json::to_string(&r1).unwrap(),
+        serde_json::to_string(&r5).unwrap(),
+    );
+    let dir = make_raw_jsonl_fixture(&jsonl);
+    let opts = default_load_opts(dir.path());
+    let loaded = load_records(&opts);
+
+    assert_eq!(loaded.records.len(), 2);
+    assert_eq!(loaded.records[0].line, 1);
+    assert_eq!(loaded.records[1].line, 5);
+}
+
+// ---------------------------------------------------------------------------
+// message_id / request_id exposure (dedup-key fields)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_token_record_exposes_message_id_and_request_id() {
+    let records = vec![mock_rec(
+        "claude-opus-4-6",
+        100,
+        50,
+        0,
+        0,
+        "2026-03-23T10:00:00Z",
+        "req_abc",
+        "msg_xyz",
+    )];
+    let dir = make_fixture(&records);
+    let opts = default_load_opts(dir.path());
+    let loaded = load_records(&opts);
+
+    assert_eq!(loaded.records.len(), 1);
+    assert_eq!(loaded.records[0].message_id.as_deref(), Some("msg_xyz"));
+    assert_eq!(loaded.records[0].request_id.as_deref(), Some("req_abc"));
+}
+
+#[test]
+fn test_priced_token_record_propagates_message_id_and_request_id() {
+    let records = vec![mock_rec(
+        "claude-opus-4-6",
+        100,
+        50,
+        0,
+        0,
+        "2026-03-23T10:00:00Z",
+        "req_abc",
+        "msg_xyz",
+    )];
+    let dir = make_fixture(&records);
+    let opts = default_load_opts(dir.path());
+    let loaded = load_records(&opts);
+    let priced = calculate_cost(&loaded.records, None);
+
+    assert_eq!(priced.len(), 1);
+    assert_eq!(priced[0].message_id.as_deref(), Some("msg_xyz"));
+    assert_eq!(priced[0].request_id.as_deref(), Some("req_abc"));
+}
+
+// ---------------------------------------------------------------------------
+// Optional dedup-key fields: behaviour when the JSONL omits them.
+//
+// Real-world JSONL occasionally lacks one or both of `message.id` /
+// `requestId` (older Claude Code versions, hand-edited files, oddball
+// tooling). The parser must still surface the record — with `None` for
+// whichever field is missing — so downstream consumers can decide how
+// to react.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_token_record_message_id_is_none_when_jsonl_omits_it() {
+    // Same shape as `mock_rec` but with no `message.id`.
+    let rec = serde_json::json!({
+        "timestamp": "2026-03-23T10:00:00Z",
+        "type": "assistant",
+        "sessionId": "session-abc",
+        "message": {
+            "role": "assistant",
+            "model": "claude-opus-4-6",
+            "usage": {
+                "input_tokens": 100,
+                "output_tokens": 50,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 0,
+            }
+        },
+        "requestId": "req_only",
+    });
+    let dir = make_fixture(&[rec]);
+    let opts = default_load_opts(dir.path());
+    let loaded = load_records(&opts);
+
+    assert_eq!(loaded.records.len(), 1);
+    assert!(loaded.records[0].message_id.is_none());
+    assert_eq!(loaded.records[0].request_id.as_deref(), Some("req_only"));
+}
+
+#[test]
+fn test_token_record_request_id_is_none_when_jsonl_omits_it() {
+    let rec = serde_json::json!({
+        "timestamp": "2026-03-23T10:00:00Z",
+        "type": "assistant",
+        "sessionId": "session-abc",
+        "message": {
+            "id": "msg_only",
+            "role": "assistant",
+            "model": "claude-opus-4-6",
+            "usage": {
+                "input_tokens": 100,
+                "output_tokens": 50,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 0,
+            }
+        },
+    });
+    let dir = make_fixture(&[rec]);
+    let opts = default_load_opts(dir.path());
+    let loaded = load_records(&opts);
+
+    assert_eq!(loaded.records.len(), 1);
+    assert_eq!(loaded.records[0].message_id.as_deref(), Some("msg_only"));
+    assert!(loaded.records[0].request_id.is_none());
+}
+
+#[test]
+fn test_token_record_both_dedup_keys_none_record_still_kept() {
+    // Without either dedup key the record can't participate in dedup,
+    // but it must still pass through (parser.rs branches on `keyed_indices`).
+    let rec = serde_json::json!({
+        "timestamp": "2026-03-23T10:00:00Z",
+        "type": "assistant",
+        "sessionId": "session-abc",
+        "message": {
+            "role": "assistant",
+            "model": "claude-opus-4-6",
+            "usage": {
+                "input_tokens": 100,
+                "output_tokens": 50,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 0,
+            }
+        },
+    });
+    let dir = make_fixture(&[rec]);
+    let opts = default_load_opts(dir.path());
+    let loaded = load_records(&opts);
+
+    assert_eq!(loaded.records.len(), 1);
+    assert!(loaded.records[0].message_id.is_none());
+    assert!(loaded.records[0].request_id.is_none());
+    // Sanity: the record's tokens still made it through.
+    assert_eq!(loaded.records[0].input_tokens, 100);
+    assert_eq!(loaded.records[0].output_tokens, 50);
+}
+
+#[test]
+fn test_priced_token_record_preserves_none_dedup_keys() {
+    // None propagates through PricedTokenRecord::from_token_record too.
+    let rec = serde_json::json!({
+        "timestamp": "2026-03-23T10:00:00Z",
+        "type": "assistant",
+        "sessionId": "session-abc",
+        "message": {
+            "role": "assistant",
+            "model": "claude-opus-4-6",
+            "usage": {
+                "input_tokens": 100,
+                "output_tokens": 50,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 0,
+            }
+        },
+    });
+    let dir = make_fixture(&[rec]);
+    let opts = default_load_opts(dir.path());
+    let loaded = load_records(&opts);
+    let priced = calculate_cost(&loaded.records, None);
+
+    assert_eq!(priced.len(), 1);
+    assert!(priced[0].message_id.is_none());
+    assert!(priced[0].request_id.is_none());
+}
+
+// ---------------------------------------------------------------------------
+// LoadOptions.project_dirs — directory-level pre-filter
+//
+// `project` filter is applied **after** every JSONL has been parsed, so
+// scoping a query to one project doesn't actually skip any IO. The new
+// `project_dirs` field tells `discover_project_dirs` which encoded
+// project subdirectories to even consider — non-listed projects are
+// skipped entirely (no parse, no dedup work).
+//
+// Naming: `project_dirs` takes the **encoded** form (the on-disk
+// directory name like `-home-user-my-project`), because that's what
+// callers like ccfriend already have on hand from
+// `Project.dirName`. Mixing it with the human-readable `project`
+// post-filter is allowed.
+// ---------------------------------------------------------------------------
+
+fn make_two_project_fixture() -> TempDir {
+    let dir = TempDir::new().unwrap();
+    let alpha_dir = dir.path().join("projects").join("-home-user-alpha");
+    let beta_dir = dir.path().join("projects").join("-home-user-beta");
+    fs::create_dir_all(&alpha_dir).unwrap();
+    fs::create_dir_all(&beta_dir).unwrap();
+
+    // Alpha has 1 priced assistant entry.
+    let alpha_rec = mock_rec(
+        "claude-opus-4-6",
+        100,
+        50,
+        0,
+        0,
+        "2026-03-23T10:00:00Z",
+        "req_alpha",
+        "msg_alpha",
+    );
+    fs::write(
+        alpha_dir.join("session-alpha.jsonl"),
+        serde_json::to_string(&alpha_rec).unwrap(),
+    )
+    .unwrap();
+
+    // Beta has 1 priced assistant entry.
+    let beta_rec = mock_rec(
+        "claude-opus-4-6",
+        200,
+        100,
+        0,
+        0,
+        "2026-03-23T11:00:00Z",
+        "req_beta",
+        "msg_beta",
+    );
+    fs::write(
+        beta_dir.join("session-beta.jsonl"),
+        serde_json::to_string(&beta_rec).unwrap(),
+    )
+    .unwrap();
+
+    dir
+}
+
+#[test]
+fn test_project_dirs_pre_filter_restricts_to_listed_directories() {
+    let dir = make_two_project_fixture();
+    let opts = LoadOptions {
+        claude_dir: Some(dir.path().to_string_lossy().to_string()),
+        tz: Some("UTC".to_string()),
+        project_dirs: Some(vec!["-home-user-alpha".to_string()]),
+        ..Default::default()
+    };
+
+    let result = load_records(&opts);
+
+    assert_eq!(result.records.len(), 1);
+    assert_eq!(result.records[0].input_tokens, 100);
+    assert_eq!(
+        result.records[0].project, "/home/user/alpha",
+        "expected alpha's record only; beta should not have been loaded"
+    );
+}
+
+#[test]
+fn test_project_dirs_pre_filter_supports_multiple_directories() {
+    let dir = make_two_project_fixture();
+    let opts = LoadOptions {
+        claude_dir: Some(dir.path().to_string_lossy().to_string()),
+        tz: Some("UTC".to_string()),
+        project_dirs: Some(vec![
+            "-home-user-alpha".to_string(),
+            "-home-user-beta".to_string(),
+        ]),
+        ..Default::default()
+    };
+
+    let result = load_records(&opts);
+    assert_eq!(result.records.len(), 2, "both listed projects loaded");
+}
+
+#[test]
+fn test_project_dirs_none_means_load_all_projects_unchanged_default() {
+    // Backward-compat: `project_dirs: None` (or omitted) keeps the
+    // existing behavior of loading every project under claude_dir.
+    let dir = make_two_project_fixture();
+    let opts = LoadOptions {
+        claude_dir: Some(dir.path().to_string_lossy().to_string()),
+        tz: Some("UTC".to_string()),
+        ..Default::default()
+    };
+    let result = load_records(&opts);
+    assert_eq!(result.records.len(), 2);
+}
+
+#[test]
+fn test_project_dirs_silently_skips_nonexistent_directories() {
+    // A request for a directory that doesn't exist should yield an empty
+    // result, not an error — matches how `claude_dir` itself handles a
+    // missing path.
+    let dir = make_two_project_fixture();
+    let opts = LoadOptions {
+        claude_dir: Some(dir.path().to_string_lossy().to_string()),
+        tz: Some("UTC".to_string()),
+        project_dirs: Some(vec!["-this-does-not-exist".to_string()]),
+        ..Default::default()
+    };
+    let result = load_records(&opts);
+    assert!(result.records.is_empty());
+}
+
+#[test]
+fn test_project_dirs_composes_with_project_post_filter() {
+    // `project_dirs` takes encoded form (`-home-user-alpha`); `project`
+    // is a human-readable substring (`/home/user/alpha`). Both pointing
+    // at the same project → only that project loads, post-filter
+    // narrows on top. Both pointing at different projects → empty.
+    let dir = make_two_project_fixture();
+
+    // Same target via both fields: 1 record.
+    let opts = LoadOptions {
+        claude_dir: Some(dir.path().to_string_lossy().to_string()),
+        tz: Some("UTC".to_string()),
+        project_dirs: Some(vec!["-home-user-alpha".to_string()]),
+        project: Some("/home/user/alpha".to_string()),
+        ..Default::default()
+    };
+    assert_eq!(load_records(&opts).records.len(), 1);
+
+    // Mismatched: project_dirs loads alpha, but project filters it out
+    // because "/home/user/beta" is not in alpha's record.project.
+    let opts_mismatched = LoadOptions {
+        claude_dir: Some(dir.path().to_string_lossy().to_string()),
+        tz: Some("UTC".to_string()),
+        project_dirs: Some(vec!["-home-user-alpha".to_string()]),
+        project: Some("/home/user/beta".to_string()),
+        ..Default::default()
+    };
+    assert!(load_records(&opts_mismatched).records.is_empty());
+}
+
+#[test]
+fn test_project_dirs_composes_with_session_post_filter() {
+    // project_dirs scopes IO; session post-filter further narrows
+    // records by session_id substring.
+    let dir = make_two_project_fixture();
+    let opts = LoadOptions {
+        claude_dir: Some(dir.path().to_string_lossy().to_string()),
+        tz: Some("UTC".to_string()),
+        project_dirs: Some(vec!["-home-user-alpha".to_string()]),
+        session: Some("session-alpha".to_string()),
+        ..Default::default()
+    };
+    let result = load_records(&opts);
+    assert_eq!(result.records.len(), 1);
+    assert_eq!(result.records[0].session_id, "session-alpha");
+}
+
+#[test]
+fn test_project_dirs_duplicates_in_list_only_load_once() {
+    // Caller-provided list is de-duplicated by canonicalize. Listing a
+    // project twice doesn't make its records appear twice.
+    let dir = make_two_project_fixture();
+    let opts = LoadOptions {
+        claude_dir: Some(dir.path().to_string_lossy().to_string()),
+        tz: Some("UTC".to_string()),
+        project_dirs: Some(vec![
+            "-home-user-alpha".to_string(),
+            "-home-user-alpha".to_string(),
+        ]),
+        ..Default::default()
+    };
+    assert_eq!(load_records(&opts).records.len(), 1);
+}
+
+#[test]
+fn test_project_dirs_mix_of_existing_and_missing_directories() {
+    // Sane partial-success behavior: known projects load, unknown
+    // names are silently skipped. No error.
+    let dir = make_two_project_fixture();
+    let opts = LoadOptions {
+        claude_dir: Some(dir.path().to_string_lossy().to_string()),
+        tz: Some("UTC".to_string()),
+        project_dirs: Some(vec![
+            "-home-user-alpha".to_string(),
+            "-this-does-not-exist".to_string(),
+        ]),
+        ..Default::default()
+    };
+    assert_eq!(load_records(&opts).records.len(), 1);
+}
+
+#[test]
+fn test_project_dirs_empty_vec_loads_no_projects() {
+    // Caller passing an explicit empty list = "load no projects".
+    // Distinct from `None` (which means "load everything").
+    let dir = make_two_project_fixture();
+    let opts = LoadOptions {
+        claude_dir: Some(dir.path().to_string_lossy().to_string()),
+        tz: Some("UTC".to_string()),
+        project_dirs: Some(vec![]),
+        ..Default::default()
+    };
+    let result = load_records(&opts);
+    assert!(result.records.is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// LoadOptions.session_files — file-level pre-filter by session UUID.
+//
+// `session` is a substring post-filter on `record.session_id`, so it
+// reads every JSONL even when scoped to one session. `session_files`
+// instead skips JSONL files whose owning session UUID isn't in the
+// requested list — saves IO on large project dirs.
+//
+// Filter granularity: matches main session files (`<uuid>.jsonl`) AND
+// both subagent layouts (old `<uuid>_<agent>.jsonl` directly under
+// `subagents/`, new `<uuid>/subagents/<agent>.jsonl`). Reuses
+// `extract_session_and_agent` so the inclusion rule cannot drift from
+// what `session_id` post-filter would later compare against.
+// ---------------------------------------------------------------------------
+
+fn make_two_session_fixture() -> TempDir {
+    let dir = TempDir::new().unwrap();
+    let proj = dir.path().join("projects").join("-home-user-proj");
+    fs::create_dir_all(&proj).unwrap();
+
+    let alpha = mock_rec(
+        "claude-opus-4-6",
+        100,
+        50,
+        0,
+        0,
+        "2026-04-15T10:00:00Z",
+        "req_a",
+        "msg_a",
+    );
+    let beta = mock_rec(
+        "claude-opus-4-6",
+        200,
+        100,
+        0,
+        0,
+        "2026-04-15T11:00:00Z",
+        "req_b",
+        "msg_b",
+    );
+    fs::write(
+        proj.join("11111111-2222-3333-4444-555555555555.jsonl"),
+        serde_json::to_string(&alpha).unwrap(),
+    )
+    .unwrap();
+    fs::write(
+        proj.join("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.jsonl"),
+        serde_json::to_string(&beta).unwrap(),
+    )
+    .unwrap();
+    dir
+}
+
+#[test]
+fn test_session_files_pre_filter_loads_only_named_session() {
+    let dir = make_two_session_fixture();
+    let opts = LoadOptions {
+        claude_dir: Some(dir.path().to_string_lossy().to_string()),
+        tz: Some("UTC".to_string()),
+        session_files: Some(vec!["11111111-2222-3333-4444-555555555555".to_string()]),
+        ..Default::default()
+    };
+    let result = load_records(&opts);
+    assert_eq!(result.records.len(), 1);
+    assert_eq!(result.records[0].input_tokens, 100);
+}
+
+#[test]
+fn test_session_files_pre_filter_supports_multiple_sessions() {
+    let dir = make_two_session_fixture();
+    let opts = LoadOptions {
+        claude_dir: Some(dir.path().to_string_lossy().to_string()),
+        tz: Some("UTC".to_string()),
+        session_files: Some(vec![
+            "11111111-2222-3333-4444-555555555555".to_string(),
+            "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee".to_string(),
+        ]),
+        ..Default::default()
+    };
+    let result = load_records(&opts);
+    assert_eq!(result.records.len(), 2);
+}
+
+#[test]
+fn test_session_files_none_means_load_every_file_unchanged_default() {
+    let dir = make_two_session_fixture();
+    let opts = LoadOptions {
+        claude_dir: Some(dir.path().to_string_lossy().to_string()),
+        tz: Some("UTC".to_string()),
+        ..Default::default()
+    };
+    let result = load_records(&opts);
+    assert_eq!(result.records.len(), 2);
+}
+
+#[test]
+fn test_session_files_silently_skips_unknown_session_ids() {
+    let dir = make_two_session_fixture();
+    let opts = LoadOptions {
+        claude_dir: Some(dir.path().to_string_lossy().to_string()),
+        tz: Some("UTC".to_string()),
+        session_files: Some(vec!["nonexistent-uuid".to_string()]),
+        ..Default::default()
+    };
+    let result = load_records(&opts);
+    assert!(result.records.is_empty());
+}
+
+#[test]
+fn test_session_files_empty_vec_loads_no_files() {
+    let dir = make_two_session_fixture();
+    let opts = LoadOptions {
+        claude_dir: Some(dir.path().to_string_lossy().to_string()),
+        tz: Some("UTC".to_string()),
+        session_files: Some(vec![]),
+        ..Default::default()
+    };
+    let result = load_records(&opts);
+    assert!(result.records.is_empty());
+}
+
+#[test]
+fn test_session_files_includes_old_subagent_layout_for_named_session() {
+    // Old subagent layout: <project>/subagents/<session>_<agent>.jsonl
+    // — `extract_session_and_agent` returns file_stem as session_id
+    // (the entire `<session>_<agent>` string). To pull this in, the
+    // caller must list THAT stem (not just the bare session UUID).
+    let dir = TempDir::new().unwrap();
+    let proj = dir.path().join("projects").join("-home-user-proj");
+    let subagents_dir = proj.join("subagents");
+    fs::create_dir_all(&subagents_dir).unwrap();
+
+    let main_uuid = "11111111-2222-3333-4444-555555555555";
+    let old_subagent_stem = format!("{}_agent-deadbeef", main_uuid);
+    let main_rec = mock_rec(
+        "claude-opus-4-6",
+        100,
+        50,
+        0,
+        0,
+        "2026-04-15T10:00:00Z",
+        "req_main",
+        "msg_main",
+    );
+    let sub_rec = mock_rec(
+        "claude-opus-4-6",
+        200,
+        100,
+        0,
+        0,
+        "2026-04-15T10:01:00Z",
+        "req_sub",
+        "msg_sub",
+    );
+    fs::write(
+        proj.join(format!("{}.jsonl", main_uuid)),
+        serde_json::to_string(&main_rec).unwrap(),
+    )
+    .unwrap();
+    fs::write(
+        subagents_dir.join(format!("{}.jsonl", old_subagent_stem)),
+        serde_json::to_string(&sub_rec).unwrap(),
+    )
+    .unwrap();
+
+    // Listing only the main UUID picks up the main file but NOT the
+    // old subagent (its session_id is the full stem, not the UUID).
+    let opts_main_only = LoadOptions {
+        claude_dir: Some(dir.path().to_string_lossy().to_string()),
+        tz: Some("UTC".to_string()),
+        session_files: Some(vec![main_uuid.to_string()]),
+        ..Default::default()
+    };
+    assert_eq!(load_records(&opts_main_only).records.len(), 1);
+
+    // Listing the full subagent stem also picks up the subagent.
+    let opts_both = LoadOptions {
+        claude_dir: Some(dir.path().to_string_lossy().to_string()),
+        tz: Some("UTC".to_string()),
+        session_files: Some(vec![main_uuid.to_string(), old_subagent_stem.clone()]),
+        ..Default::default()
+    };
+    assert_eq!(load_records(&opts_both).records.len(), 2);
+}
+
+#[test]
+fn test_session_files_composes_with_project_dirs() {
+    // Two projects, each with two sessions. Filter to one project
+    // AND one session → single record.
+    let dir = TempDir::new().unwrap();
+    let alpha = dir.path().join("projects").join("-home-user-alpha");
+    let beta = dir.path().join("projects").join("-home-user-beta");
+    fs::create_dir_all(&alpha).unwrap();
+    fs::create_dir_all(&beta).unwrap();
+    let alpha1_uuid = "aaaa1111-1111-1111-1111-111111111111";
+    let alpha2_uuid = "aaaa2222-2222-2222-2222-222222222222";
+    let beta1_uuid = "bbbb1111-1111-1111-1111-111111111111";
+    let beta2_uuid = "bbbb2222-2222-2222-2222-222222222222";
+    for (path, uuid, req, msg) in [
+        (&alpha, alpha1_uuid, "req_a1", "msg_a1"),
+        (&alpha, alpha2_uuid, "req_a2", "msg_a2"),
+        (&beta, beta1_uuid, "req_b1", "msg_b1"),
+        (&beta, beta2_uuid, "req_b2", "msg_b2"),
+    ] {
+        let rec = mock_rec(
+            "claude-opus-4-6",
+            100,
+            50,
+            0,
+            0,
+            "2026-04-15T10:00:00Z",
+            req,
+            msg,
+        );
+        fs::write(
+            path.join(format!("{}.jsonl", uuid)),
+            serde_json::to_string(&rec).unwrap(),
+        )
+        .unwrap();
+    }
+
+    let opts = LoadOptions {
+        claude_dir: Some(dir.path().to_string_lossy().to_string()),
+        tz: Some("UTC".to_string()),
+        project_dirs: Some(vec!["-home-user-alpha".to_string()]),
+        session_files: Some(vec![alpha1_uuid.to_string()]),
+        ..Default::default()
+    };
+    let result = load_records(&opts);
+    assert_eq!(result.records.len(), 1);
+    assert_eq!(result.records[0].session_id, alpha1_uuid);
+}
+
+#[test]
+fn test_session_files_does_not_break_global_dedup() {
+    // ccost dedup is global across all loaded records. With two
+    // streaming partial frames sharing (msg-x, req-x), the higher-
+    // output one wins regardless of which session_files filter is
+    // applied — as long as both frames remain in the loaded set.
+    let dir = TempDir::new().unwrap();
+    let proj = dir.path().join("projects").join("-home-user-proj");
+    fs::create_dir_all(&proj).unwrap();
+
+    let session_uuid = "11111111-2222-3333-4444-555555555555";
+    let rec1 = mock_rec(
+        "claude-opus-4-6",
+        100,
+        10,
+        0,
+        0,
+        "2026-04-15T10:00:00Z",
+        "req-x",
+        "msg-x",
+    );
+    let rec2 = mock_rec(
+        "claude-opus-4-6",
+        100,
+        70,
+        0,
+        0,
+        "2026-04-15T10:00:01Z",
+        "req-x",
+        "msg-x",
+    );
+    let content = format!(
+        "{}\n{}",
+        serde_json::to_string(&rec1).unwrap(),
+        serde_json::to_string(&rec2).unwrap()
+    );
+    fs::write(proj.join(format!("{}.jsonl", session_uuid)), content).unwrap();
+
+    let opts = LoadOptions {
+        claude_dir: Some(dir.path().to_string_lossy().to_string()),
+        tz: Some("UTC".to_string()),
+        session_files: Some(vec![session_uuid.to_string()]),
+        ..Default::default()
+    };
+    let result = load_records(&opts);
+    assert_eq!(result.records.len(), 1);
+    assert_eq!(result.records[0].output_tokens, 70);
+}
+
+#[test]
+fn test_session_files_includes_new_subagent_files_for_named_session() {
+    // New subagent layout: <project>/<session-uuid>/subagents/<agent>.jsonl
+    // — same session UUID but in a child directory. session_files MUST
+    // pull these in (via extract_session_and_agent's grandparent
+    // detection) or subagent costs would silently drop out.
+    let dir = TempDir::new().unwrap();
+    let proj = dir.path().join("projects").join("-home-user-proj");
+    let session_uuid = "11111111-2222-3333-4444-555555555555";
+    let main_dir = &proj;
+    let subagents_dir = proj.join(session_uuid).join("subagents");
+    fs::create_dir_all(main_dir).unwrap();
+    fs::create_dir_all(&subagents_dir).unwrap();
+
+    let main_rec = mock_rec(
+        "claude-opus-4-6",
+        100,
+        50,
+        0,
+        0,
+        "2026-04-15T10:00:00Z",
+        "req_main",
+        "msg_main",
+    );
+    let sub_rec = mock_rec(
+        "claude-opus-4-6",
+        200,
+        100,
+        0,
+        0,
+        "2026-04-15T10:01:00Z",
+        "req_sub",
+        "msg_sub",
+    );
+    fs::write(
+        main_dir.join(format!("{}.jsonl", session_uuid)),
+        serde_json::to_string(&main_rec).unwrap(),
+    )
+    .unwrap();
+    fs::write(
+        subagents_dir.join("agent-a0f53f284339341b2.jsonl"),
+        serde_json::to_string(&sub_rec).unwrap(),
+    )
+    .unwrap();
+
+    let opts = LoadOptions {
+        claude_dir: Some(dir.path().to_string_lossy().to_string()),
+        tz: Some("UTC".to_string()),
+        session_files: Some(vec![session_uuid.to_string()]),
+        ..Default::default()
+    };
+    let result = load_records(&opts);
+    assert_eq!(
+        result.records.len(),
+        2,
+        "main session record + subagent record both belong to {}",
+        session_uuid
+    );
+}
+
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_dedup_skips_records_missing_keys() {
+    // Two records with identical (would-be-dup) shape but neither carries
+    // both dedup keys. They must NOT collapse together — dedup only acts
+    // on records that have BOTH `message.id` and `requestId`.
+    let rec1 = serde_json::json!({
+        "timestamp": "2026-03-23T10:00:00Z",
+        "type": "assistant",
+        "sessionId": "session-abc",
+        "message": {
+            "role": "assistant",
+            "model": "claude-opus-4-6",
+            "usage": {
+                "input_tokens": 100,
+                "output_tokens": 50,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 0,
+            }
+        },
+    });
+    let rec2 = serde_json::json!({
+        "timestamp": "2026-03-23T10:00:01Z",
+        "type": "assistant",
+        "sessionId": "session-abc",
+        "message": {
+            "role": "assistant",
+            "model": "claude-opus-4-6",
+            "usage": {
+                "input_tokens": 200,
+                "output_tokens": 80,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 0,
+            }
+        },
+    });
+    let dir = make_fixture(&[rec1, rec2]);
+    let opts = default_load_opts(dir.path());
+    let loaded = load_records(&opts);
+
+    assert_eq!(loaded.records.len(), 2, "no dedup keys → no dedup");
+    assert_eq!(loaded.dedup.before, 2);
+    assert_eq!(loaded.dedup.after, 2);
+}

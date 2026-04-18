@@ -1986,3 +1986,210 @@ fn test_order_asc() {
         "In asc order, 2026-03-22 should appear before 2026-03-23"
     );
 }
+
+// ─── --project-dirs / --session-files (B' + session_files pre-filters) ───────
+
+/// Two projects, two sessions each, distinct timestamps so we can
+/// detect via `--per project` / `--per session` which records loaded.
+fn make_two_project_two_session_fixture() -> TempDir {
+    let dir = TempDir::new().unwrap();
+    let alpha = dir.path().join("projects").join("-home-user-alpha");
+    let beta = dir.path().join("projects").join("-home-user-beta");
+    fs::create_dir_all(&alpha).unwrap();
+    fs::create_dir_all(&beta).unwrap();
+
+    let alpha1_uuid = "aaaa1111-1111-1111-1111-111111111111";
+    let alpha2_uuid = "aaaa2222-2222-2222-2222-222222222222";
+    let beta1_uuid = "bbbb1111-1111-1111-1111-111111111111";
+
+    let alpha1 = serde_json::json!({
+        "timestamp": "2026-04-15T10:00:00Z", "type": "assistant", "sessionId": alpha1_uuid,
+        "message": {"id": "msg_a1", "role": "assistant", "model": "claude-opus-4-1",
+            "usage": {"input_tokens": 100, "output_tokens": 50}},
+        "requestId": "req_a1",
+    });
+    let alpha2 = serde_json::json!({
+        "timestamp": "2026-04-15T11:00:00Z", "type": "assistant", "sessionId": alpha2_uuid,
+        "message": {"id": "msg_a2", "role": "assistant", "model": "claude-opus-4-1",
+            "usage": {"input_tokens": 200, "output_tokens": 100}},
+        "requestId": "req_a2",
+    });
+    let beta1 = serde_json::json!({
+        "timestamp": "2026-04-15T12:00:00Z", "type": "assistant", "sessionId": beta1_uuid,
+        "message": {"id": "msg_b1", "role": "assistant", "model": "claude-opus-4-1",
+            "usage": {"input_tokens": 400, "output_tokens": 200}},
+        "requestId": "req_b1",
+    });
+    fs::write(
+        alpha.join(format!("{}.jsonl", alpha1_uuid)),
+        serde_json::to_string(&alpha1).unwrap(),
+    )
+    .unwrap();
+    fs::write(
+        alpha.join(format!("{}.jsonl", alpha2_uuid)),
+        serde_json::to_string(&alpha2).unwrap(),
+    )
+    .unwrap();
+    fs::write(
+        beta.join(format!("{}.jsonl", beta1_uuid)),
+        serde_json::to_string(&beta1).unwrap(),
+    )
+    .unwrap();
+    dir
+}
+
+#[test]
+fn test_cli_project_dirs_flag_restricts_load() {
+    let dir = make_two_project_two_session_fixture();
+    // JSON output makes the "what loaded" assertion exact.
+    let output = Command::cargo_bin("ccost")
+        .unwrap()
+        .args([
+            "--project-dirs",
+            "-home-user-alpha",
+            "--per",
+            "project",
+            "--output",
+            "json",
+            "--filename",
+            "-",
+            "--claude-dir",
+            dir.path().to_str().unwrap(),
+            "--tz",
+            "UTC",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "ccost --project-dirs should succeed; stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("/home/user/alpha"), "alpha must appear");
+    assert!(
+        !stdout.contains("/home/user/beta"),
+        "beta must NOT appear (was pre-filtered out at directory level): {}",
+        stdout
+    );
+}
+
+#[test]
+fn test_cli_project_dirs_flag_supports_comma_separated_list() {
+    let dir = make_two_project_two_session_fixture();
+    let output = Command::cargo_bin("ccost")
+        .unwrap()
+        .args([
+            "--project-dirs",
+            "-home-user-alpha,-home-user-beta",
+            "--per",
+            "project",
+            "--output",
+            "json",
+            "--filename",
+            "-",
+            "--claude-dir",
+            dir.path().to_str().unwrap(),
+            "--tz",
+            "UTC",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("/home/user/alpha"));
+    assert!(stdout.contains("/home/user/beta"));
+}
+
+#[test]
+fn test_cli_project_dirs_flag_trims_whitespace_around_items() {
+    let dir = make_two_project_two_session_fixture();
+    // Accept sloppy input — leading/trailing/inter-item whitespace.
+    let output = Command::cargo_bin("ccost")
+        .unwrap()
+        .args([
+            "--project-dirs",
+            " -home-user-alpha ,  -home-user-beta  ",
+            "--per",
+            "project",
+            "--output",
+            "json",
+            "--filename",
+            "-",
+            "--claude-dir",
+            dir.path().to_str().unwrap(),
+            "--tz",
+            "UTC",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("/home/user/alpha"));
+    assert!(stdout.contains("/home/user/beta"));
+}
+
+#[test]
+fn test_cli_session_files_flag_restricts_load() {
+    let dir = make_two_project_two_session_fixture();
+    let output = Command::cargo_bin("ccost")
+        .unwrap()
+        .args([
+            "--session-files",
+            "aaaa1111-1111-1111-1111-111111111111",
+            "--per",
+            "session",
+            "--output",
+            "json",
+            "--filename",
+            "-",
+            "--claude-dir",
+            dir.path().to_str().unwrap(),
+            "--tz",
+            "UTC",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("aaaa1111-1111-1111-1111-111111111111"));
+    assert!(!stdout.contains("aaaa2222-2222-2222-2222-222222222222"));
+    assert!(!stdout.contains("bbbb1111-1111-1111-1111-111111111111"));
+}
+
+#[test]
+fn test_cli_project_dirs_and_session_files_compose() {
+    // --project-dirs scopes IO at the dir level; --session-files
+    // further filters at the file level. Both apply together.
+    let dir = make_two_project_two_session_fixture();
+    let output = Command::cargo_bin("ccost")
+        .unwrap()
+        .args([
+            "--project-dirs",
+            "-home-user-alpha",
+            "--session-files",
+            "aaaa2222-2222-2222-2222-222222222222",
+            "--per",
+            "session",
+            "--output",
+            "json",
+            "--filename",
+            "-",
+            "--claude-dir",
+            dir.path().to_str().unwrap(),
+            "--tz",
+            "UTC",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("aaaa2222"));
+    assert!(!stdout.contains("aaaa1111"));
+    assert!(!stdout.contains("bbbb1111"));
+}

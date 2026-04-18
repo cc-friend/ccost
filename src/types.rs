@@ -10,11 +10,21 @@ pub struct TokenRecord {
     pub project: String,
     pub agent_id: String,
     pub tool_names: String,
+    /// 1-based **physical** line number in the source JSONL file.
+    /// Counts every line including empty lines and lines that fail to parse,
+    /// so the value lines up with `vim +N`, `sed -n 'Np'`, GitHub blob `#LN`,
+    /// and any external tool that operates on physical line numbers.
     pub line: u32,
     pub input_tokens: u64,
     pub output_tokens: u64,
     pub cache_creation_tokens: u64,
     pub cache_read_tokens: u64,
+    /// Anthropic-assigned message id (`message.id` in the JSONL). `None` only
+    /// for records that omit it. Together with `request_id`, this is the
+    /// dedup key — stable across re-emits and safe as a cross-tool join key.
+    pub message_id: Option<String>,
+    /// API request id (`requestId` in the JSONL). See `message_id` for usage.
+    pub request_id: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -30,6 +40,8 @@ pub struct PricedTokenRecord {
     pub output_tokens: u64,
     pub cache_creation_tokens: u64,
     pub cache_read_tokens: u64,
+    pub message_id: Option<String>,
+    pub request_id: Option<String>,
     pub input_cost: f64,
     pub cache_creation_cost: f64,
     pub cache_read_cost: f64,
@@ -57,6 +69,8 @@ impl PricedTokenRecord {
             output_tokens: record.output_tokens,
             cache_creation_tokens: record.cache_creation_tokens,
             cache_read_tokens: record.cache_read_tokens,
+            message_id: record.message_id.clone(),
+            request_id: record.request_id.clone(),
             input_cost,
             cache_creation_cost,
             cache_read_cost,
@@ -199,6 +213,36 @@ pub struct LoadOptions {
     pub project: Option<String>,
     pub model: Option<String>,
     pub session: Option<String>,
+    /// Directory-level pre-filter. When `Some(list)`, only the named
+    /// project subdirectories under `<claude_dir>/projects/` are
+    /// scanned — every other project is skipped before any IO. Names
+    /// are the **encoded** on-disk form (e.g. `-home-user-my-project`,
+    /// matching `Project.dirName` in ccfriend), not the human-readable
+    /// project path. An explicit empty `Vec` means "load nothing"; the
+    /// default `None` preserves the legacy behavior of scanning every
+    /// project.
+    ///
+    /// This is the load-time analog of the `project` field, which is a
+    /// post-load filter on `record.project`. The two compose: a query
+    /// can name its directories explicitly **and** still substring-
+    /// filter the resulting records.
+    pub project_dirs: Option<Vec<String>>,
+    /// File-level pre-filter by session UUID. When `Some(list)`, only
+    /// JSONL files whose owning session id is in the list are read —
+    /// every other file is skipped before parse. The match honors all
+    /// three on-disk layouts via `extract_session_and_agent`:
+    ///
+    ///   - main session: `<project>/<uuid>.jsonl`
+    ///   - new subagent: `<project>/<uuid>/subagents/<agent>.jsonl`
+    ///   - old subagent: `<project>/subagents/<uuid>_<agent>.jsonl`
+    ///
+    /// All three resolve to the same `session_id`, so listing one
+    /// UUID transparently pulls in its subagents too.
+    ///
+    /// Composes with `project_dirs` (which restricts which directories
+    /// are even discovered) and with the `session` post-filter (which
+    /// substring-matches `record.session_id` after load).
+    pub session_files: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -415,6 +459,8 @@ mod tests {
             output_tokens: 50,
             cache_creation_tokens: 10,
             cache_read_tokens: 5,
+            message_id: Some("msg-id".to_string()),
+            request_id: Some("req-id".to_string()),
         };
 
         let priced = PricedTokenRecord::from_token_record(&record, 0.01, 0.02, 0.003, 0.04);
@@ -430,6 +476,8 @@ mod tests {
         assert_eq!(priced.output_tokens, 50);
         assert_eq!(priced.cache_creation_tokens, 10);
         assert_eq!(priced.cache_read_tokens, 5);
+        assert_eq!(priced.message_id.as_deref(), Some("msg-id"));
+        assert_eq!(priced.request_id.as_deref(), Some("req-id"));
         assert!((priced.input_cost - 0.01).abs() < f64::EPSILON);
         assert!((priced.cache_creation_cost - 0.02).abs() < f64::EPSILON);
         assert!((priced.cache_read_cost - 0.003).abs() < f64::EPSILON);
