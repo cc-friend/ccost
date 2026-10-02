@@ -41,6 +41,14 @@ fn make_record(
         five_hour_resets_at: five_hour_resets_at.and_then(|s| Utc.timestamp_opt(s, 0).single()),
         seven_day_pct,
         seven_day_resets_at: seven_day_resets_at.and_then(|s| Utc.timestamp_opt(s, 0).single()),
+        effort: None,
+        session_name: None,
+        fast_mode: None,
+        prompt_cache_ttl: None,
+        prompt_cache_hit_ratio: None,
+        spend_limit_pct: None,
+        spend_limit_resets_at: None,
+        exceeds_200k: None,
     }
 }
 
@@ -1038,6 +1046,7 @@ fn make_session(
         max_five_hour_pct: None,
         min_seven_day_pct: None,
         max_seven_day_pct: None,
+        session_name: None,
     }
 }
 
@@ -1115,6 +1124,7 @@ fn make_session_with_pct(
         max_five_hour_pct: five_hour_pct,
         min_seven_day_pct: seven_day_pct,
         max_seven_day_pct: seven_day_pct,
+        session_name: None,
     }
 }
 
@@ -1382,4 +1392,48 @@ fn test_filter_windows_empty_input() {
         Some("UTC"),
     );
     assert_eq!(filtered.len(), 0);
+}
+
+// ─── session_name (0.6.0) ─────────────────────────────────────────────────────
+
+#[test]
+fn test_session_name_is_last_non_empty_value() {
+    let mut a = make_record(
+        1000, "s1", "/p", 0.1, 10, 5, 0, 0, None, None, None, None, None,
+    );
+    let mut b = make_record(
+        2000, "s1", "/p", 0.2, 20, 10, 0, 0, None, None, None, None, None,
+    );
+    let mut c = make_record(
+        3000, "s1", "/p", 0.3, 30, 15, 0, 0, None, None, None, None, None,
+    );
+    let d = make_record(
+        4000, "s1", "/p", 0.4, 40, 20, 0, 0, None, None, None, None, None,
+    );
+    a.session_name = Some("first-name".to_string());
+    b.session_name = Some("renamed".to_string());
+    c.session_name = Some(String::new());
+    // Out of order on purpose: aggregation sorts by ts.
+    let summaries = aggregate_sessions(&[d, c, b, a]);
+    assert_eq!(summaries.len(), 1);
+    assert_eq!(summaries[0].session_name.as_deref(), Some("renamed"));
+}
+
+#[test]
+fn test_session_name_absent_is_none_and_omitted_from_json() {
+    let a = make_record(
+        1000, "s1", "/p", 0.1, 10, 5, 0, 0, None, None, None, None, None,
+    );
+    let summaries = aggregate_sessions(&[a]);
+    assert_eq!(summaries[0].session_name, None);
+    let v = serde_json::to_value(&summaries[0]).unwrap();
+    assert!(v.get("sessionName").is_none(), "{v}");
+
+    let mut b = make_record(
+        1000, "s2", "/p", 0.1, 10, 5, 0, 0, None, None, None, None, None,
+    );
+    b.session_name = Some("named".to_string());
+    let summaries = aggregate_sessions(&[b]);
+    let v = serde_json::to_value(&summaries[0]).unwrap();
+    assert_eq!(v["sessionName"], "named");
 }

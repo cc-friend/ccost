@@ -20,6 +20,24 @@ pub struct SlRecord {
     pub five_hour_resets_at: Option<DateTime<Utc>>,
     pub seven_day_pct: Option<u8>,
     pub seven_day_resets_at: Option<DateTime<Utc>>,
+    // ── Optional fields added by newer Claude Code versions (2.1.2xx+). All
+    // `None` when absent or of an unexpected type; never fail the record.
+    /// `effort.level` (e.g. `"high"`).
+    pub effort: Option<String>,
+    /// `session_name` (the `/title`-style session name), verbatim.
+    pub session_name: Option<String>,
+    /// `fast_mode`.
+    pub fast_mode: Option<bool>,
+    /// `prompt_cache.ttl` (e.g. `"5m"`, `"1h"`).
+    pub prompt_cache_ttl: Option<String>,
+    /// `prompt_cache.hit_ratio` (0–1).
+    pub prompt_cache_hit_ratio: Option<f64>,
+    /// `rate_limits.spend_limit.used_percentage` (unrounded).
+    pub spend_limit_pct: Option<f64>,
+    /// `rate_limits.spend_limit.resets_at` (unix seconds → UTC).
+    pub spend_limit_resets_at: Option<DateTime<Utc>>,
+    /// `exceeds_200k_tokens`.
+    pub exceeds_200k: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -42,6 +60,10 @@ pub struct SlSessionSummary {
     pub max_five_hour_pct: Option<u8>,
     pub min_seven_day_pct: Option<u8>,
     pub max_seven_day_pct: Option<u8>,
+    /// Last non-empty `session_name` seen in the session (by timestamp).
+    /// Omitted from JSON when `None`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]

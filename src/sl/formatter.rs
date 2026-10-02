@@ -1451,6 +1451,7 @@ mod tests {
             max_five_hour_pct: Some(30),
             min_seven_day_pct: Some(50),
             max_seven_day_pct: Some(50),
+            session_name: None,
         }
     }
 

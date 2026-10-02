@@ -1,5 +1,6 @@
 use chrono::{DateTime, Local, TimeZone, Utc};
 use serde::Deserialize;
+use serde_json::Value;
 use std::fs;
 
 use super::types::{SlLoadOptions, SlRecord};
@@ -17,6 +18,10 @@ struct RawRateLimitWindow {
 struct RawRateLimits {
     five_hour: Option<RawRateLimitWindow>,
     seven_day: Option<RawRateLimitWindow>,
+    /// Kept as raw JSON: its shape may change (e.g. a USD-denominated form
+    /// without `used_percentage`) and must never fail the record.
+    #[serde(default)]
+    spend_limit: Option<Value>,
 }
 
 #[derive(Deserialize)]
@@ -59,6 +64,38 @@ struct RawData {
     context_window: RawContextWindow,
     #[serde(default)]
     rate_limits: Option<RawRateLimits>,
+    // Newer optional fields, kept as raw JSON and read leniently (wrong type
+    // → None) so an unexpected shape never drops the whole record.
+    #[serde(default)]
+    effort: Option<Value>,
+    #[serde(default)]
+    session_name: Option<Value>,
+    #[serde(default)]
+    fast_mode: Option<Value>,
+    #[serde(default)]
+    prompt_cache: Option<Value>,
+    #[serde(default)]
+    exceeds_200k_tokens: Option<Value>,
+}
+
+/// `effort.level`; a bare string `effort` is accepted too.
+fn effort_level(v: Option<&Value>) -> Option<String> {
+    let v = v?;
+    v.get("level")
+        .and_then(Value::as_str)
+        .or_else(|| v.as_str())
+        .map(str::to_string)
+}
+
+fn str_of(v: Option<&Value>) -> Option<String> {
+    v.and_then(Value::as_str).map(str::to_string)
+}
+
+/// Unix seconds (integer or float) → UTC.
+fn epoch_secs(v: Option<&Value>) -> Option<DateTime<Utc>> {
+    let v = v?;
+    let secs = v.as_i64().or_else(|| v.as_f64().map(|f| f as i64))?;
+    Utc.timestamp_opt(secs, 0).single()
 }
 
 #[derive(Deserialize)]
@@ -249,6 +286,11 @@ pub fn load_sl_records(file_path: &str, opts: &SlLoadOptions) -> (Vec<SlRecord>,
                 None => (None, None, None, None),
             };
 
+        let spend_limit = d
+            .rate_limits
+            .as_ref()
+            .and_then(|rl| rl.spend_limit.as_ref());
+
         records.push(SlRecord {
             ts,
             session_id: d.session_id.clone(),
@@ -267,6 +309,20 @@ pub fn load_sl_records(file_path: &str, opts: &SlLoadOptions) -> (Vec<SlRecord>,
             five_hour_resets_at,
             seven_day_pct,
             seven_day_resets_at,
+            effort: effort_level(d.effort.as_ref()),
+            session_name: str_of(d.session_name.as_ref()),
+            fast_mode: d.fast_mode.as_ref().and_then(Value::as_bool),
+            prompt_cache_ttl: str_of(d.prompt_cache.as_ref().and_then(|p| p.get("ttl"))),
+            prompt_cache_hit_ratio: d
+                .prompt_cache
+                .as_ref()
+                .and_then(|p| p.get("hit_ratio"))
+                .and_then(Value::as_f64),
+            spend_limit_pct: spend_limit
+                .and_then(|s| s.get("used_percentage"))
+                .and_then(Value::as_f64),
+            spend_limit_resets_at: epoch_secs(spend_limit.and_then(|s| s.get("resets_at"))),
+            exceeds_200k: d.exceeds_200k_tokens.as_ref().and_then(Value::as_bool),
         });
     }
 

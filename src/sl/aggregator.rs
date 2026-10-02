@@ -266,6 +266,11 @@ pub fn aggregate_sessions(records: &[SlRecord]) -> Vec<SlSessionSummary> {
 
         let five_hour_pcts: Vec<u8> = recs.iter().filter_map(|r| r.five_hour_pct).collect();
         let seven_day_pcts: Vec<u8> = recs.iter().filter_map(|r| r.seven_day_pct).collect();
+        let session_name = recs
+            .iter()
+            .rev()
+            .find_map(|r| r.session_name.as_deref().filter(|n| !n.is_empty()))
+            .map(str::to_string);
 
         result.push(SlSessionSummary {
             session_id,
@@ -285,6 +290,7 @@ pub fn aggregate_sessions(records: &[SlRecord]) -> Vec<SlSessionSummary> {
             max_five_hour_pct: five_hour_pcts.iter().copied().max(),
             min_seven_day_pct: seven_day_pcts.iter().copied().min(),
             max_seven_day_pct: seven_day_pcts.iter().copied().max(),
+            session_name,
         });
     }
 
@@ -835,6 +841,14 @@ mod tests {
             five_hour_resets_at: five_hour_resets_at.map(|s| Utc.timestamp_opt(s, 0).unwrap()),
             seven_day_pct,
             seven_day_resets_at: seven_day_resets_at.map(|s| Utc.timestamp_opt(s, 0).unwrap()),
+            effort: None,
+            session_name: None,
+            fast_mode: None,
+            prompt_cache_ttl: None,
+            prompt_cache_hit_ratio: None,
+            spend_limit_pct: None,
+            spend_limit_resets_at: None,
+            exceeds_200k: None,
         }
     }
 
@@ -868,6 +882,7 @@ mod tests {
             max_five_hour_pct,
             min_seven_day_pct,
             max_seven_day_pct,
+            session_name: None,
         }
     }
 

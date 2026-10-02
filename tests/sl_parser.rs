@@ -481,3 +481,98 @@ fn test_nonexistent_file_returns_empty() {
     assert_eq!(records.len(), 0);
     assert_eq!(skipped, 0);
 }
+
+// ─── Claude Code 2.1.285 statusline fields (0.6.0) ───────────────────────────
+
+/// Mirrors ccfriend's statusline-editor `sample-input.json` (Claude Code 2.1.285).
+fn entry_2_1_285(ts: i64, data_extra: &str) -> String {
+    format!(
+        r#"{{"ts": {ts}, "data": {{"session_id": "cac2b0a7", "cwd": "/home/user/project", "effort": {{"level": "high"}}, "session_name": "refactor-auth-flow", "model": {{"id": "claude-opus-5-5", "display_name": "Opus 5.5"}}, "workspace": {{"current_dir": "/home/user/project", "project_dir": "/home/user/project", "added_dirs": ["/home/user/shared-lib"]}}, "version": "2.1.285", "cost": {{"total_cost_usd": 12.4831, "total_duration_ms": 5423000, "total_api_duration_ms": 1284000, "total_lines_added": 842, "total_lines_removed": 117}}, "context_window": {{"total_input_tokens": 318420, "context_window_size": 1000000, "used_percentage": 32}}, "exceeds_200k_tokens": true, "prompt_cache": {{"warm": true, "ttl": "1h", "hit_ratio": 0.9731, "last_miss_cause": null}}, "fast_mode": false, "thinking": {{"enabled": true}}{data_extra}}}}}"#
+    )
+}
+
+#[test]
+fn test_sl_2_1_285_fields_parsed() {
+    let line = entry_2_1_285(
+        1790790000,
+        r#", "rate_limits": {"five_hour": {"used_percentage": 41, "resets_at": 1790804400}, "seven_day": {"used_percentage": 50, "resets_at": 1790906400}, "spend_limit": {"used_percentage": 62.8, "resets_at": 1791244800}}"#,
+    );
+    let f = write_jsonl(&[&line]);
+    let (records, skipped) = load_sl_records(f.path().to_str().unwrap(), &SlLoadOptions::default());
+    assert_eq!(skipped, 0);
+    assert_eq!(records.len(), 1);
+    let r = &records[0];
+    assert_eq!(r.effort.as_deref(), Some("high"));
+    assert_eq!(r.session_name.as_deref(), Some("refactor-auth-flow"));
+    assert_eq!(r.fast_mode, Some(false));
+    assert_eq!(r.prompt_cache_ttl.as_deref(), Some("1h"));
+    assert_eq!(r.prompt_cache_hit_ratio, Some(0.9731));
+    assert_eq!(r.spend_limit_pct, Some(62.8));
+    assert_eq!(
+        r.spend_limit_resets_at.map(|t| t.timestamp()),
+        Some(1791244800)
+    );
+    assert_eq!(r.exceeds_200k, Some(true));
+    // Existing fields unaffected.
+    assert_eq!(r.five_hour_pct, Some(41));
+    assert_eq!(r.seven_day_pct, Some(50));
+    assert_eq!(r.context_pct, Some(32));
+}
+
+#[test]
+fn test_sl_new_fields_absent_in_older_records() {
+    let line = full_entry(1774481258, "sess-abc", "/p", "claude-sonnet-4-5");
+    let no_rl = entry_no_rate_limits(1774481300, "sess-def", "/p", "claude-haiku-4");
+    let f = write_jsonl(&[&line, &no_rl]);
+    let (records, skipped) = load_sl_records(f.path().to_str().unwrap(), &SlLoadOptions::default());
+    assert_eq!(skipped, 0);
+    assert_eq!(records.len(), 2);
+    for r in &records {
+        assert_eq!(r.effort, None);
+        assert_eq!(r.session_name, None);
+        assert_eq!(r.fast_mode, None);
+        assert_eq!(r.prompt_cache_ttl, None);
+        assert_eq!(r.prompt_cache_hit_ratio, None);
+        assert_eq!(r.spend_limit_pct, None);
+        assert_eq!(r.spend_limit_resets_at, None);
+        assert_eq!(r.exceeds_200k, None);
+    }
+}
+
+#[test]
+fn test_sl_spend_limit_without_used_percentage() {
+    // Possible future USD-denominated shape: no `used_percentage`.
+    let line = entry_2_1_285(
+        1790790000,
+        r#", "rate_limits": {"five_hour": {"used_percentage": 41, "resets_at": 1790804400}, "spend_limit": {"used_usd": 12.5, "limit_usd": 100, "resets_at": 1791244800}}"#,
+    );
+    let f = write_jsonl(&[&line]);
+    let (records, skipped) = load_sl_records(f.path().to_str().unwrap(), &SlLoadOptions::default());
+    assert_eq!(skipped, 0);
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].spend_limit_pct, None);
+    assert_eq!(
+        records[0].spend_limit_resets_at.map(|t| t.timestamp()),
+        Some(1791244800)
+    );
+    assert_eq!(records[0].five_hour_pct, Some(41));
+}
+
+#[test]
+fn test_sl_new_fields_wrong_types_do_not_drop_record() {
+    // Unexpected shapes for the optional fields must never cost the record.
+    let line = r#"{"ts": 1790790000, "data": {"session_id": "s1", "workspace": {"project_dir": "/p"}, "model": {"id": "claude-opus-5-5"}, "cost": {"total_cost_usd": 1.0, "total_duration_ms": 1, "total_api_duration_ms": 1}, "context_window": {"context_window_size": 200000}, "effort": 3, "session_name": null, "fast_mode": "yes", "prompt_cache": "warm", "exceeds_200k_tokens": 1, "rate_limits": {"spend_limit": "n/a"}}}"#;
+    let f = write_jsonl(&[line]);
+    let (records, skipped) = load_sl_records(f.path().to_str().unwrap(), &SlLoadOptions::default());
+    assert_eq!(skipped, 0);
+    assert_eq!(records.len(), 1);
+    let r = &records[0];
+    assert_eq!(r.effort, None);
+    assert_eq!(r.session_name, None);
+    assert_eq!(r.fast_mode, None);
+    assert_eq!(r.prompt_cache_ttl, None);
+    assert_eq!(r.prompt_cache_hit_ratio, None);
+    assert_eq!(r.exceeds_200k, None);
+    assert_eq!(r.spend_limit_pct, None);
+    assert_eq!(r.spend_limit_resets_at, None);
+}
