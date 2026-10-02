@@ -148,11 +148,12 @@ jobs:
           node-version: "20"
           registry-url: "https://registry.npmjs.org"
 
+      # Trusted Publishing (OIDC) requires npm >= 11.5.1
+      - run: npm install -g npm@latest
+
       - name: Set version and publish
         working-directory: npm
         run: |
           VERSION=${GITHUB_REF_NAME#v}
           npm version "$VERSION" --no-git-tag-version
           npm publish --provenance
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
