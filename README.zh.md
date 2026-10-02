@@ -103,8 +103,8 @@ ccost sl --chart 5h                      # 速率限制图表
 
 | 参数 | 说明 |
 |------|------|
-| `--live-pricing` | 从 LiteLLM 获取最新定价（需网络）。 |
-| `--pricing-data <path>` | 自定义定价 JSON 文件。 |
+| `--live-pricing` | 从 LiteLLM 获取最新定价（需网络）。内置的 Anthropic 官方覆盖价格仍会叠加在其上。 |
+| `--pricing-data <path>` | 自定义定价 JSON 文件，合并到内置定价之上（同名模型整条替换）。见[定价](#定价-1)。 |
 
 ### 其他
 
@@ -204,6 +204,23 @@ Add-Content -Path "$env:USERPROFILE\.claude\statusline.jsonl" -Value $line -Enco
 | `--cost-diff` | 对比状态栏自报费用和 LiteLLM 计算费用。仅 `--per session`。 |
 
 所有共享参数（`--from`、`--to`、`--tz`、`--session`、`--project`、`--model`、`--cost`、`--output`、`--filename`、`--copy`、`--order`、`--table`）均适用于 `ccost sl`。
+
+### 解析的字段
+
+`statusline.jsonl` 的每一行解析为一个 `SlRecord`（库类型）。除核心字段（会话、项目、模型、版本、累计费用 / 时长 / 行数、上下文占比、5 小时 / 1 周速率限制）外，较新的 Claude Code（2.1.285）新增的以下字段在存在时也会被解析。它们都是可选的：旧文件、缺失值或结构不符（例如 `spend_limit` 没有 `used_percentage`）都会得到 `None`，不会丢弃该行。
+
+| statusline 输入 | `SlRecord` 字段 |
+|-----------------|-----------------|
+| `effort.level` | `effort: Option<String>` |
+| `session_name` | `session_name: Option<String>` |
+| `fast_mode` | `fast_mode: Option<bool>` |
+| `prompt_cache.ttl` | `prompt_cache_ttl: Option<String>` |
+| `prompt_cache.hit_ratio` | `prompt_cache_hit_ratio: Option<f64>` |
+| `rate_limits.spend_limit.used_percentage` | `spend_limit_pct: Option<f64>` |
+| `rate_limits.spend_limit.resets_at` | `spend_limit_resets_at: Option<DateTime<Utc>>` |
+| `exceeds_200k_tokens` | `exceeds_200k: Option<bool>` |
+
+表格输出不变。`--per session --output json` 会为有名称的会话加上 `sessionName`（该会话中最后一个非空的 `session_name`）。
 
 ### 分段聚合
 
@@ -350,9 +367,49 @@ struct LoadOptions {
     project: Option<String>,    // 子串过滤
     model: Option<String>,
     session: Option<String>,
+    project_dirs: Option<Vec<String>>,  // 加载时过滤：编码后的项目目录名
+    session_files: Option<Vec<String>>, // 加载时过滤：会话 UUID
 }
 
-enum GroupDimension { Day, Hour, Month, Session, Project, Model, Subagent }
+enum GroupDimension { Day, Hour, Month, Session, Project, Model, Subagent, Tool, Line }
+
+// 去重后的一条 assistant 记录。PricedTokenRecord 字段相同，另加
+// input_cost、cache_creation_cost、cache_read_cost、output_cost、total_cost。
+struct TokenRecord {
+    timestamp: DateTime<Utc>,
+    model: String,
+    session_id: String,
+    project: String,
+    agent_id: String,                 // 主会话为 ""
+    tool_names: String,
+    line: u32,                        // JSONL 物理行号（从 1 开始）
+    input_tokens: u64,
+    output_tokens: u64,
+    cache_creation_tokens: u64,       // 缓存写入总量
+    cache_read_tokens: u64,
+    cache_creation_5m_tokens: u64,    // 5 分钟缓存写入（含拆分未覆盖的余量）
+    cache_creation_1h_tokens: u64,    // 1 小时缓存写入
+    speed: Option<String>,            // usage.speed（"fast" = 快速模式）
+    inference_geo: Option<String>,    // usage.inference_geo（"us" = 1.1 倍）
+    message_id: Option<String>,
+    request_id: Option<String>,
+}
+
+struct PricingData {
+    fetched_at: String,
+    models: HashMap<String, ModelPricing>,
+}
+
+struct ModelPricing {                 // 每 token 美元价格；JSON 键为 camelCase
+    input_cost_per_token: f64,
+    output_cost_per_token: f64,
+    cache_creation_cost_per_token: f64,             // 5 分钟缓存写入
+    cache_read_cost_per_token: f64,
+    cache_creation_1h_cost_per_token: Option<f64>,  // None -> 2 x 输入价
+    fast_mode_multiplier: Option<f64>,              // None -> 快速模式不加价
+}
+// ModelPricing::cache_creation_1h_rate() -> f64（字段值，或 2 x 输入价）
+// US_INFERENCE_GEO_MULTIPLIER: f64 = 1.1
 
 struct GroupedData {
     label: String,
@@ -402,13 +459,51 @@ struct GroupedData {
 
 ### 定价
 
-按记录计算费用，模型到价格的查找分四级：
+定价来源，优先级从低到高：
+
+1. `src/pricing-data.json`：LiteLLM 快照，包含 Claude、GLM、Kimi 和 MiniMax（官方提供 Claude Code 兼容 API 的热门编程大模型）的模型，用 `cargo run --bin update-pricing` 刷新。使用 `--live-pricing` 时改为运行时从 LiteLLM 获取。
+2. `src/pricing-overrides.json`：手工维护的 Anthropic 官方价格，覆盖当前的 Claude 模型（Fable / Mythos 5 和 5.1、Opus 5.5 / 5 / 4.8 / 4.7 / 4.6 / 4.5、Sonnet 5.5 / 5 / 4.6 / 4.5、Haiku 4.5，均为不带日期的 id），包含 1 小时缓存写入价、快速模式倍率，以及零价格的 `<synthetic>` 条目。始终合并在 (1) 之上，`--live-pricing` 时也一样。
+3. `--pricing-data <path>`：用户文件。其中每个模型整条替换内置条目。
+
+模型条目（每 token 美元价格）：
+
+```json
+"claude-opus-5-5": {
+  "inputCostPerToken": 4e-6,
+  "outputCostPerToken": 2e-5,
+  "cacheCreationCostPerToken": 5e-6,
+  "cacheReadCostPerToken": 2e-7,
+  "cacheCreation1hCostPerToken": 8e-6,
+  "fastModeMultiplier": 2
+}
+```
+
+最后两个字段可选。没有 `cacheCreation1hCostPerToken` 时，1 小时缓存写入按输入价的 2 倍计；没有 `fastModeMultiplier` 时，快速模式与标准模式同价。
+
+每条记录的费用：
+
+```
+  input_tokens             x inputCostPerToken
++ output_tokens            x outputCostPerToken
++ cache_read_tokens        x cacheReadCostPerToken
++ cache_creation_5m_tokens x cacheCreationCostPerToken
++ cache_creation_1h_tokens x cacheCreation1hCostPerToken（默认 2 x 输入价）
+```
+
+- 5 分钟 / 1 小时拆分来自 `usage.cache_creation.ephemeral_5m_input_tokens` / `ephemeral_1h_input_tokens`。没有拆分的记录，全部缓存写入按 5 分钟计；拆分未覆盖的 token 也按 5 分钟计。
+- **快速模式**：`usage.speed == "fast"` 时，各项费用乘以该模型的 `fastModeMultiplier`（Opus 5.5、Opus 5、Opus 4.8 为 2 倍；其他模型忽略此标记）。
+- **推理地域**：`usage.inference_geo == "us"` 时，各项费用乘以 1.1。两个倍率可叠加。
+- `<synthetic>` 记录（Claude Code 的占位行）在加载时被跳过；零价格条目让自行计价的库调用方得到 $0。
+
+模型查找（`match_model_name`）：
+
+0. 去掉末尾的 `[1m]`（不区分大小写）。Claude Code 会给 1M 上下文会话的模型 id 加上它（如 `claude-opus-5-5[1m]`），按标准价计费。会先用原始名称尝试，所以自定义的 `[1m]` 键优先。
 1. 精确匹配
 2. 去掉日期后缀（`-YYYYMMDD` / `@YYYYMMDD`）后重试
 3. 大小写不敏感精确匹配（含去日期后缀）
-4. 大小写不敏感子串匹配
+4. 大小写不敏感的双向子串匹配，只考虑含数字的键。取最长的匹配键，长度相同按字母序，因此结果与哈希表顺序无关，LiteLLM 的裸 `claude` 键也不会匹配到未知模型。未知模型费用为 $0 并给出警告。
 
-内置定价包含 Claude、GLM、Kimi 和 MiniMax（官方提供 Claude Code 兼容 API 的热门编程大模型）的模型，数据来自 LiteLLM。用 `--live-pricing` 获取最新，或 `--pricing-data` 指定自定义文件。
+`--per model` 会把 1M 上下文会话单独列出，如 `opus-5-5 [1m]`。
 
 ### `ccost` 与 `ccost sl`
 

@@ -103,8 +103,8 @@ Granularity auto-selects based on range (hour/day/month). Only `--output txt` wo
 
 | Flag | Description |
 |------|-------------|
-| `--live-pricing` | Fetch latest from LiteLLM (requires network). |
-| `--pricing-data <path>` | Custom pricing JSON file. |
+| `--live-pricing` | Fetch latest from LiteLLM (requires network). The bundled official Anthropic overrides are still applied on top. |
+| `--pricing-data <path>` | Custom pricing JSON file, merged over the bundled pricing (each model entry replaces the bundled one). See [Pricing](#pricing-1). |
 
 ### Other
 
@@ -204,6 +204,23 @@ The `5h%` and `1w%` columns show the observed min-max range (e.g. `1-29%`).
 | `--cost-diff` | Compare statusline cost with LiteLLM pricing. Only with `--per session`. |
 
 All shared flags (`--from`, `--to`, `--tz`, `--session`, `--project`, `--model`, `--cost`, `--output`, `--filename`, `--copy`, `--order`, `--table`) work with `ccost sl`.
+
+### Recorded Fields
+
+Each line of `statusline.jsonl` becomes an `SlRecord` (library type). Besides the core fields (session, project, model, version, cumulative cost / duration / lines, context %, 5h / 1w rate limits), these fields from newer Claude Code versions (2.1.285) are parsed when present. They are all optional: older files, missing values, or an unexpected shape (e.g. a `spend_limit` without `used_percentage`) give `None` and never drop the line.
+
+| statusline input | `SlRecord` field |
+|------------------|------------------|
+| `effort.level` | `effort: Option<String>` |
+| `session_name` | `session_name: Option<String>` |
+| `fast_mode` | `fast_mode: Option<bool>` |
+| `prompt_cache.ttl` | `prompt_cache_ttl: Option<String>` |
+| `prompt_cache.hit_ratio` | `prompt_cache_hit_ratio: Option<f64>` |
+| `rate_limits.spend_limit.used_percentage` | `spend_limit_pct: Option<f64>` |
+| `rate_limits.spend_limit.resets_at` | `spend_limit_resets_at: Option<DateTime<Utc>>` |
+| `exceeds_200k_tokens` | `exceeds_200k: Option<bool>` |
+
+Tables are unchanged. `--per session --output json` adds `sessionName` (the last non-empty `session_name` seen in the session) to sessions that have one.
 
 ### Segments and Continued Sessions
 
@@ -352,9 +369,49 @@ struct LoadOptions {
     project: Option<String>,    // substring filter
     model: Option<String>,
     session: Option<String>,
+    project_dirs: Option<Vec<String>>,  // load-time filter: encoded project dir names
+    session_files: Option<Vec<String>>, // load-time filter: session UUIDs
 }
 
-enum GroupDimension { Day, Hour, Month, Session, Project, Model, Subagent }
+enum GroupDimension { Day, Hour, Month, Session, Project, Model, Subagent, Tool, Line }
+
+// One deduplicated assistant row. PricedTokenRecord has the same fields
+// plus input_cost, cache_creation_cost, cache_read_cost, output_cost, total_cost.
+struct TokenRecord {
+    timestamp: DateTime<Utc>,
+    model: String,
+    session_id: String,
+    project: String,
+    agent_id: String,                 // "" for the main session
+    tool_names: String,
+    line: u32,                        // 1-based physical JSONL line
+    input_tokens: u64,
+    output_tokens: u64,
+    cache_creation_tokens: u64,       // total cache writes
+    cache_read_tokens: u64,
+    cache_creation_5m_tokens: u64,    // 5-minute cache writes (incl. unsplit remainder)
+    cache_creation_1h_tokens: u64,    // 1-hour cache writes
+    speed: Option<String>,            // usage.speed ("fast" = fast mode)
+    inference_geo: Option<String>,    // usage.inference_geo ("us" = 1.1x)
+    message_id: Option<String>,
+    request_id: Option<String>,
+}
+
+struct PricingData {
+    fetched_at: String,
+    models: HashMap<String, ModelPricing>,
+}
+
+struct ModelPricing {                 // per-token USD; JSON keys are camelCase
+    input_cost_per_token: f64,
+    output_cost_per_token: f64,
+    cache_creation_cost_per_token: f64,             // 5-minute cache write
+    cache_read_cost_per_token: f64,
+    cache_creation_1h_cost_per_token: Option<f64>,  // None -> 2 x input
+    fast_mode_multiplier: Option<f64>,              // None -> no fast-mode surcharge
+}
+// ModelPricing::cache_creation_1h_rate() -> f64 (field, or 2 x input)
+// US_INFERENCE_GEO_MULTIPLIER: f64 = 1.1
 
 struct GroupedData {
     label: String,
@@ -404,13 +461,51 @@ Streaming entries share the same `messageId:requestId` key with increasing `outp
 
 ### Pricing
 
-Per-record cost via model-to-price lookup:
+Pricing sources, lowest to highest precedence:
+
+1. `src/pricing-data.json`: a LiteLLM snapshot covering Claude, GLM, Kimi, and MiniMax (popular coding LLMs with official Claude Code-compatible API endpoints), refreshed with `cargo run --bin update-pricing`. With `--live-pricing`, the same data is fetched from LiteLLM at runtime instead.
+2. `src/pricing-overrides.json`: hand-maintained official Anthropic list prices for current Claude models (Fable / Mythos 5 and 5.1, Opus 5.5 / 5 / 4.8 / 4.7 / 4.6 / 4.5, Sonnet 5.5 / 5 / 4.6 / 4.5, Haiku 4.5, under their undated ids), with the 1-hour cache-write rate, fast-mode multipliers, and a zero-rate `<synthetic>` entry. Always merged on top of (1), including with `--live-pricing`.
+3. `--pricing-data <path>`: your file. Each model in it replaces the bundled entry entirely.
+
+A model entry (per-token USD):
+
+```json
+"claude-opus-5-5": {
+  "inputCostPerToken": 4e-6,
+  "outputCostPerToken": 2e-5,
+  "cacheCreationCostPerToken": 5e-6,
+  "cacheReadCostPerToken": 2e-7,
+  "cacheCreation1hCostPerToken": 8e-6,
+  "fastModeMultiplier": 2
+}
+```
+
+The last two fields are optional. Without `cacheCreation1hCostPerToken` the 1-hour cache write costs 2x input; without `fastModeMultiplier` fast mode costs the same as standard.
+
+Per-record cost:
+
+```
+  input_tokens             x inputCostPerToken
++ output_tokens            x outputCostPerToken
++ cache_read_tokens        x cacheReadCostPerToken
++ cache_creation_5m_tokens x cacheCreationCostPerToken
++ cache_creation_1h_tokens x cacheCreation1hCostPerToken (default 2 x input)
+```
+
+- The 5-minute / 1-hour split comes from `usage.cache_creation.ephemeral_5m_input_tokens` / `ephemeral_1h_input_tokens`. Rows without it count every cache write as 5-minute, and tokens the split does not account for are billed as 5-minute too.
+- **Fast mode**: `usage.speed == "fast"` multiplies every component by the model's `fastModeMultiplier` (2x on Opus 5.5, Opus 5, and Opus 4.8; other models ignore the flag).
+- **Inference geo**: `usage.inference_geo == "us"` multiplies every component by 1.1. Both multipliers stack.
+- `<synthetic>` rows (Claude Code placeholders) are skipped when loading; the zero-rate entry keeps library callers who price them at $0.
+
+Model lookup (`match_model_name`):
+
+0. Strip a trailing `[1m]` (any case). Claude Code appends it to 1M-context sessions (e.g. `claude-opus-5-5[1m]`), which bill at the standard rate. The raw name is still tried first, so a custom `[1m]` key wins.
 1. Exact match
 2. Strip date suffix (`-YYYYMMDD` / `@YYYYMMDD`), retry
 3. Case-insensitive exact match (with and without date suffix)
-4. Case-insensitive substring match
+4. Case-insensitive substring match in either direction, only against keys that contain a digit. The longest matching key wins, ties broken alphabetically, so the result never depends on hash-map order, and LiteLLM's bare `claude` key cannot match an unknown model. Unknown models cost $0 with a warning.
 
-Bundled pricing includes Claude, GLM, Kimi, and MiniMax (popular coding LLMs with official Claude Code-compatible API endpoints) from LiteLLM. Use `--live-pricing` for latest or `--pricing-data` for custom.
+`--per model` labels 1M-context sessions separately, e.g. `opus-5-5 [1m]`.
 
 ### `ccost` vs `ccost sl`
 
