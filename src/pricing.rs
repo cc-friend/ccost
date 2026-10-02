@@ -10,6 +10,10 @@ static DATE_SUFFIX_PRICING_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"[-@]\d{8}$").unwrap());
 static VERSION_SUFFIX_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"-v\d+(?::\d+)?$").unwrap());
+/// Claude Code's 1M-context marker (`claude-opus-5-5[1m]`); bills at the
+/// standard rate, so it is stripped before matching.
+static LONG_CONTEXT_SUFFIX_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)\[1m\]$").unwrap());
 
 /// Multiplier applied to every cost component of a record whose
 /// `usage.inference_geo == "us"` (US-only inference is billed at 1.1×).
@@ -172,49 +176,92 @@ pub fn parse_litellm_pricing(
     Ok(PricingData { fetched_at, models })
 }
 
-/// Three-tier fuzzy matching of a JSONL model name against pricing models.
+/// Fuzzy matching of a JSONL model name against pricing models.
 ///
+/// 0. Strip a trailing `[1m]` (case-insensitive; Claude Code's 1M-context
+///    marker, billed at the standard rate) — the raw name is still tried
+///    first in tier 1, so a table with a literal `[1m]` key wins
 /// 1. Direct exact match
 /// 2. Strip trailing `-YYYYMMDD` or `@YYYYMMDD` date suffix, retry exact match
 /// 3. Case-insensitive exact match (with and without date suffix)
-/// 4. Case-insensitive substring containment
+/// 4. Case-insensitive substring containment (either direction), restricted
+///    to keys containing at least one ASCII digit — so LiteLLM's bare
+///    `claude` / `claude-instant` keys never catch an unknown model.
+///    Deterministic: the LONGEST candidate key wins, ties broken by
+///    lexicographic key order (never `HashMap` iteration order).
 pub fn match_model_name<'a>(
     jsonl_name: &str,
     pricing_models: &'a HashMap<String, ModelPricing>,
 ) -> Option<&'a ModelPricing> {
-    // Tier 1: direct exact match
+    // Tier 1 (raw): a literal key wins before any normalization.
     if let Some(pricing) = pricing_models.get(jsonl_name) {
         return Some(pricing);
     }
 
+    // Tier 0: strip the `[1m]` long-context suffix.
+    let name = LONG_CONTEXT_SUFFIX_RE.replace(jsonl_name, "");
+    let name: &str = &name;
+    if name.is_empty() {
+        return None;
+    }
+
+    // Tier 1: direct exact match on the stripped name
+    if name != jsonl_name {
+        if let Some(pricing) = pricing_models.get(name) {
+            return Some(pricing);
+        }
+    }
+
     // Tier 2: strip date suffix and retry
-    let stripped = DATE_SUFFIX_PRICING_RE.replace(jsonl_name, "").to_string();
-    if stripped != jsonl_name {
+    let stripped = DATE_SUFFIX_PRICING_RE.replace(name, "").to_string();
+    if stripped != name {
         if let Some(pricing) = pricing_models.get(&stripped) {
             return Some(pricing);
         }
     }
 
     // Tier 3: case-insensitive exact match (with and without date suffix)
-    let jsonl_lower = jsonl_name.to_ascii_lowercase();
+    let name_lower = name.to_ascii_lowercase();
     let stripped_lower = stripped.to_ascii_lowercase();
+    let mut tier3: Option<(&String, &ModelPricing)> = None;
     for (key, pricing) in pricing_models {
         let key_lower = key.to_ascii_lowercase();
-        if key_lower == jsonl_lower || (stripped != jsonl_name && key_lower == stripped_lower) {
-            return Some(pricing);
+        if key_lower == name_lower || (stripped != name && key_lower == stripped_lower) {
+            // Several keys can differ only in case; pick the smallest key so
+            // the result never depends on HashMap iteration order.
+            let better = match tier3 {
+                None => true,
+                Some((best, _)) => key < best,
+            };
+            if better {
+                tier3 = Some((key, pricing));
+            }
         }
     }
+    if let Some((_, pricing)) = tier3 {
+        return Some(pricing);
+    }
 
-    // Tier 4: case-insensitive substring containment
+    // Tier 4: deterministic longest-match substring containment over
+    // digit-bearing keys.
+    let mut best: Option<(&String, &ModelPricing)> = None;
     for (key, pricing) in pricing_models {
+        if !key.bytes().any(|b| b.is_ascii_digit()) {
+            continue;
+        }
         let key_lower = key.to_ascii_lowercase();
-        if jsonl_lower.contains(&key_lower) || key_lower.contains(&jsonl_lower) {
-            return Some(pricing);
+        if !(name_lower.contains(&key_lower) || key_lower.contains(&name_lower)) {
+            continue;
+        }
+        let better = match best {
+            None => true,
+            Some((b, _)) => key.len() > b.len() || (key.len() == b.len() && key < b),
+        };
+        if better {
+            best = Some((key, pricing));
         }
     }
-
-    // No match
-    None
+    best.map(|(_, pricing)| pricing)
 }
 
 /// Calculate costs for a slice of token records using pricing data.
@@ -949,27 +996,96 @@ mod tests {
 
     #[test]
     fn test_match_model_no_false_positive_partial() {
-        // "claude" is in the bundled pricing, but the substring tier must not
-        // accidentally match it when a better key like "claude-sonnet-4" is present.
-        // The test verifies that "claude" does NOT match "claude-opus-4-6" via the
-        // substring tier when the pricing table contains both.
+        // "claude" is contained in both keys (reverse containment). Tier 4
+        // picks the LONGEST key, ties broken lexicographically — both keys
+        // are 15 chars, so "claude-opus-4-6" < "claude-sonnet-4" wins, every
+        // time, regardless of HashMap iteration order.
+        for _ in 0..20 {
+            let models = make_pricing(vec![
+                ("claude-sonnet-4", 0.003, 0.015, 0.0, 0.0),
+                ("claude-opus-4-6", 0.01, 0.02, 0.0, 0.0),
+            ]);
+            let result = match_model_name("claude", &models).expect("tier 4 hit");
+            assert_eq!(result.input_cost_per_token, 0.01);
+        }
+    }
+
+    // ── match_model_name: [1m] suffix + deterministic tier 4 ────────────
+
+    #[test]
+    fn test_match_strips_1m_suffix() {
+        let pricing = load_pricing();
+        let expected = &pricing.models["claude-opus-5-5"];
+        for name in [
+            "claude-opus-5-5[1m]",
+            "CLAUDE-OPUS-5-5[1M]",
+            "claude-opus-5-5[1M]",
+        ] {
+            let got = match_model_name(name, &pricing.models).unwrap_or_else(|| panic!("{name}"));
+            assert_eq!(got, expected, "{name}");
+        }
+        // [1m] + date suffix → tier 2 on the stripped name.
+        let models = make_pricing(vec![("claude-opus-4-5", 5e-6, 2.5e-5, 0.0, 0.0)]);
+        let got = match_model_name("claude-opus-4-5-20251101[1m]", &models).unwrap();
+        assert_eq!(got.input_cost_per_token, 5e-6);
+    }
+
+    #[test]
+    fn test_match_literal_1m_key_wins_tier_1() {
+        // A user table with a literal `[1m]` key is honoured before stripping.
         let models = make_pricing(vec![
-            ("claude-opus-4-6", 0.01, 0.02, 0.0, 0.0),
-            ("claude-sonnet-4", 0.003, 0.015, 0.0, 0.0),
+            ("claude-opus-5-5", 4e-6, 0.0, 0.0, 0.0),
+            ("claude-opus-5-5[1m]", 8e-6, 0.0, 0.0, 0.0),
         ]);
-        // "claude" is shorter than both keys.  The substring tier checks whether
-        // jsonl_lower.contains(key_lower) || key_lower.contains(jsonl_lower).
-        // "claude-opus-4-6".contains("claude") → true, so Tier 4 WILL return a hit.
-        // The important property is that a result IS returned (not panicking), and
-        // that it is one of the two known pricing entries.
-        let result = match_model_name("claude", &models);
-        // Tier 4: one of the keys contains "claude" → should match
-        assert!(result.is_some());
-        let cost = result.unwrap().input_cost_per_token;
-        assert!(
-            cost == 0.01 || cost == 0.003,
-            "matched cost should be one of the two known models"
-        );
+        let got = match_model_name("claude-opus-5-5[1m]", &models).unwrap();
+        assert_eq!(got.input_cost_per_token, 8e-6);
+    }
+
+    #[test]
+    fn test_match_bare_1m_suffix_is_no_match() {
+        let models = make_pricing(vec![("claude-opus-5-5", 4e-6, 0.0, 0.0, 0.0)]);
+        assert!(match_model_name("[1m]", &models).is_none());
+    }
+
+    #[test]
+    fn test_match_tier4_longest_key_wins_regardless_of_order() {
+        let entries = [
+            ("claude", 1.0, 0.0, 0.0, 0.0),
+            ("claude-opus-4-5-20251101", 5e-6, 0.0, 0.0, 0.0),
+            ("claude-opus-4", 9.0, 0.0, 0.0, 0.0),
+        ];
+        // Several independent HashMaps (each with its own RandomState) and
+        // insertion orders.
+        for i in 0..30 {
+            let mut v = entries.to_vec();
+            v.rotate_left(i % entries.len());
+            if i % 2 == 1 {
+                v.reverse();
+            }
+            let models = make_pricing(v);
+            let got = match_model_name("claude-opus-4-5-20251101-foo", &models).unwrap();
+            assert_eq!(got.input_cost_per_token, 5e-6, "iteration {i}");
+        }
+    }
+
+    #[test]
+    fn test_match_tier4_ignores_keys_without_digits() {
+        let models = make_pricing(vec![
+            ("claude", 1.0, 0.0, 0.0, 0.0),
+            ("claude-instant", 2.0, 0.0, 0.0, 0.0),
+        ]);
+        assert!(match_model_name("claude-opus-9", &models).is_none());
+        // Exact (tier 1/3) still works for digit-less keys.
+        assert!(match_model_name("claude", &models).is_some());
+        assert!(match_model_name("Claude-Instant", &models).is_some());
+    }
+
+    #[test]
+    fn test_match_tier4_unknown_model_against_bundled_table() {
+        // Bundled LiteLLM data carries bare `claude` / `claude-instant` keys;
+        // they must never catch an unknown future Claude id.
+        let pricing = load_pricing();
+        assert!(match_model_name("claude-opus-9", &pricing.models).is_none());
     }
 
     // ── parse_litellm_pricing tests ─────────────────────────────────────

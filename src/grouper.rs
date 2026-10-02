@@ -9,14 +9,25 @@ use crate::types::{
 use crate::utils::parse_fixed_offset;
 
 static DATE_SUFFIX_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"-\d{8}$").unwrap());
+static LONG_CONTEXT_SUFFIX_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)\[1m\]$").unwrap());
 
 /// Shorten a model name by stripping the `claude-` prefix and any trailing
-/// `-YYYYMMDD` date suffix (8 digits after a dash).
+/// `-YYYYMMDD` date suffix (8 digits after a dash). A trailing `[1m]`
+/// (1M-context marker, any case) is kept as a ` [1m]` label suffix.
 ///
-/// Example: `"claude-opus-4-6-20250618"` becomes `"opus-4-6"`.
+/// Examples: `"claude-opus-4-6-20250618"` becomes `"opus-4-6"`;
+/// `"claude-opus-5-5[1m]"` becomes `"opus-5-5 [1m]"`.
 pub fn shorten_model_name(model: &str) -> String {
-    let s = model.strip_prefix("claude-").unwrap_or(model);
-    DATE_SUFFIX_RE.replace(s, "").to_string()
+    let base = LONG_CONTEXT_SUFFIX_RE.replace(model, "");
+    let long_context = base.len() != model.len();
+    let s = base.strip_prefix("claude-").unwrap_or(&base);
+    let short = DATE_SUFFIX_RE.replace(s, "");
+    if long_context {
+        format!("{short} [1m]")
+    } else {
+        short.into_owned()
+    }
 }
 
 /// Pre-resolved timezone for efficient repeated formatting.
@@ -332,6 +343,21 @@ mod tests {
     #[test]
     fn test_shorten_model_name_no_prefix() {
         assert_eq!(shorten_model_name("gpt-4"), "gpt-4");
+    }
+
+    #[test]
+    fn test_shorten_model_name_1m_suffix() {
+        assert_eq!(shorten_model_name("claude-opus-5-5[1m]"), "opus-5-5 [1m]");
+        assert_eq!(
+            shorten_model_name("CLAUDE-OPUS-5-5[1M]"),
+            "CLAUDE-OPUS-5-5 [1m]"
+        );
+        // Date suffix before [1m] is still stripped.
+        assert_eq!(
+            shorten_model_name("claude-opus-4-5-20251101[1m]"),
+            "opus-4-5 [1m]"
+        );
+        assert_eq!(shorten_model_name("claude-opus-5-5"), "opus-5-5");
     }
 
     #[test]
