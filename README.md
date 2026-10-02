@@ -360,6 +360,8 @@ print!("{}", table);
 
 ### Key Types
 
+0.6.0 adds public fields to `TokenRecord`, `PricedTokenRecord`, `ModelPricing`, `SlRecord`, and `SlSessionSummary`, so struct literals must set the new fields (or use `..Default::default()` for `ModelPricing`).
+
 ```rust
 struct LoadOptions {
     claude_dir: Option<String>,
@@ -464,7 +466,7 @@ Streaming entries share the same `messageId:requestId` key with increasing `outp
 Pricing sources, lowest to highest precedence:
 
 1. `src/pricing-data.json`: a LiteLLM snapshot covering Claude, GLM, Kimi, and MiniMax (popular coding LLMs with official Claude Code-compatible API endpoints), refreshed with `cargo run --bin update-pricing`. With `--live-pricing`, the same data is fetched from LiteLLM at runtime instead.
-2. `src/pricing-overrides.json`: hand-maintained official Anthropic list prices for current Claude models (Fable / Mythos 5 and 5.1, Opus 5.5 / 5 / 4.8 / 4.7 / 4.6 / 4.5, Sonnet 5.5 / 5 / 4.6 / 4.5, Haiku 4.5, under their undated ids), with the 1-hour cache-write rate, fast-mode multipliers, and a zero-rate `<synthetic>` entry. Always merged on top of (1), including with `--live-pricing`.
+2. `src/pricing-overrides.json`: hand-maintained official Anthropic list prices for current Claude models (Fable / Mythos 5 and 5.1, Opus 5.5 / 5 / 4.8 / 4.7 / 4.6 / 4.5, Sonnet 5.5 / 5 / 4.6 / 4.5, Haiku 4.5, under their undated ids, plus the dated ids LiteLLM uses for the 4.5 models, e.g. `claude-opus-4-5-20251101`), with the 1-hour cache-write rate, fast-mode multipliers, and a zero-rate `<synthetic>` entry. Always merged on top of (1), including with `--live-pricing`.
 3. `--pricing-data <path>`: your file. Each model in it replaces the bundled entry entirely.
 
 A model entry (per-token USD):

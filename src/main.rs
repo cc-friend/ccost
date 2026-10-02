@@ -515,7 +515,7 @@ fn main() {
         "Streaming dedup: {} duplicates removed ({} \u{2192} {})",
         dedup_removed, dedup.before, dedup.after
     );
-    let pricing_line = format!("Prices: LiteLLM ({})", pricing_date);
+    let pricing_line = format!("Prices: LiteLLM + Anthropic ({})", pricing_date);
     let footer = format!("{}\n{}", dedup_line, pricing_line);
 
     // Shared computations for both chart and non-chart paths

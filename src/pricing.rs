@@ -1405,6 +1405,25 @@ mod tests {
     }
 
     #[test]
+    fn test_dated_anthropic_aliases_beat_litellm() {
+        // LiteLLM lists these 4.5 models only under dated ids; the dated
+        // override aliases must win tier 1 (LiteLLM entries lack the 1h rate).
+        let pricing = load_pricing();
+        for (dated, undated) in [
+            ("claude-opus-4-5-20251101", "claude-opus-4-5"),
+            ("claude-sonnet-4-5-20250929", "claude-sonnet-4-5"),
+            ("claude-haiku-4-5-20251001", "claude-haiku-4-5"),
+        ] {
+            let got = match_model_name(dated, &pricing.models).expect(dated);
+            assert_eq!(got, &pricing.models[undated], "{dated}");
+            assert!(got.cache_creation_1h_cost_per_token.is_some(), "{dated}");
+        }
+        let opus = match_model_name("claude-opus-4-5-20251101", &pricing.models).unwrap();
+        assert_eq!(opus.cache_creation_1h_cost_per_token, Some(1e-5));
+        assert_eq!(opus.input_cost_per_token, 5e-6);
+    }
+
+    #[test]
     fn test_synthetic_resolves_to_zero() {
         let pricing = load_pricing();
         let p = match_model_name("<synthetic>", &pricing.models).expect("<synthetic> entry");

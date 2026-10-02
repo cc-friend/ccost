@@ -29,6 +29,13 @@
       "inputCostPerToken": 1e-06,
       "outputCostPerToken": 5e-06
     },
+    "claude-haiku-4-5-20251001": {
+      "cacheCreation1hCostPerToken": 2e-06,
+      "cacheCreationCostPerToken": 1.25e-06,
+      "cacheReadCostPerToken": 1e-07,
+      "inputCostPerToken": 1e-06,
+      "outputCostPerToken": 5e-06
+    },
     "claude-mythos-5": {
       "cacheCreation1hCostPerToken": 2e-05,
       "cacheCreationCostPerToken": 1.25e-05,
@@ -44,6 +51,13 @@
       "outputCostPerToken": 5e-05
     },
     "claude-opus-4-5": {
+      "cacheCreation1hCostPerToken": 1e-05,
+      "cacheCreationCostPerToken": 6.25e-06,
+      "cacheReadCostPerToken": 5e-07,
+      "inputCostPerToken": 5e-06,
+      "outputCostPerToken": 2.5e-05
+    },
+    "claude-opus-4-5-20251101": {
       "cacheCreation1hCostPerToken": 1e-05,
       "cacheCreationCostPerToken": 6.25e-06,
       "cacheReadCostPerToken": 5e-07,
@@ -89,6 +103,13 @@
       "fastModeMultiplier": 2
     },
     "claude-sonnet-4-5": {
+      "cacheCreation1hCostPerToken": 6e-06,
+      "cacheCreationCostPerToken": 3.75e-06,
+      "cacheReadCostPerToken": 3e-07,
+      "inputCostPerToken": 3e-06,
+      "outputCostPerToken": 1.5e-05
+    },
+    "claude-sonnet-4-5-20250929": {
       "cacheCreation1hCostPerToken": 6e-06,
       "cacheCreationCostPerToken": 3.75e-06,
       "cacheReadCostPerToken": 3e-07,

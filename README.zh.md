@@ -358,6 +358,8 @@ print!("{}", table);
 
 ### 主要类型
 
+0.6.0 为 `TokenRecord`、`PricedTokenRecord`、`ModelPricing`、`SlRecord` 和 `SlSessionSummary` 新增了公开字段，用结构体字面量构造时需要补上新字段（`ModelPricing` 也可用 `..Default::default()`）。
+
 ```rust
 struct LoadOptions {
     claude_dir: Option<String>,
@@ -462,7 +464,7 @@ struct GroupedData {
 定价来源，优先级从低到高：
 
 1. `src/pricing-data.json`：LiteLLM 快照，包含 Claude、GLM、Kimi 和 MiniMax（官方提供 Claude Code 兼容 API 的热门编程大模型）的模型，用 `cargo run --bin update-pricing` 刷新。使用 `--live-pricing` 时改为运行时从 LiteLLM 获取。
-2. `src/pricing-overrides.json`：手工维护的 Anthropic 官方价格，覆盖当前的 Claude 模型（Fable / Mythos 5 和 5.1、Opus 5.5 / 5 / 4.8 / 4.7 / 4.6 / 4.5、Sonnet 5.5 / 5 / 4.6 / 4.5、Haiku 4.5，均为不带日期的 id），包含 1 小时缓存写入价、快速模式倍率，以及零价格的 `<synthetic>` 条目。始终合并在 (1) 之上，`--live-pricing` 时也一样。
+2. `src/pricing-overrides.json`：手工维护的 Anthropic 官方价格，覆盖当前的 Claude 模型（Fable / Mythos 5 和 5.1、Opus 5.5 / 5 / 4.8 / 4.7 / 4.6 / 4.5、Sonnet 5.5 / 5 / 4.6 / 4.5、Haiku 4.5，均为不带日期的 id，另有 LiteLLM 所用的 4.5 系列带日期 id，如 `claude-opus-4-5-20251101`），包含 1 小时缓存写入价、快速模式倍率，以及零价格的 `<synthetic>` 条目。始终合并在 (1) 之上，`--live-pricing` 时也一样。
 3. `--pricing-data <path>`：用户文件。其中每个模型整条替换内置条目。
 
 模型条目（每 token 美元价格）：

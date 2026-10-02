@@ -133,8 +133,8 @@ fn test_terminal_table_output() {
         "Expected 'Streaming dedup' in stderr"
     );
     assert!(
-        stderr.contains("Prices: LiteLLM"),
-        "Expected 'Prices: LiteLLM' in stderr"
+        stderr.contains("Prices: LiteLLM + Anthropic ("),
+        "Expected 'Prices: LiteLLM + Anthropic (' in stderr"
     );
 }
 
