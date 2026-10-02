@@ -11,6 +11,10 @@ static DATE_SUFFIX_PRICING_RE: LazyLock<Regex> =
 static VERSION_SUFFIX_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"-v\d+(?::\d+)?$").unwrap());
 
+/// Multiplier applied to every cost component of a record whose
+/// `usage.inference_geo == "us"` (US-only inference is billed at 1.1×).
+pub const US_INFERENCE_GEO_MULTIPLIER: f64 = 1.1;
+
 /// Supported LiteLLM key prefixes and the provider prefix to strip.
 /// Format: (key_prefix_to_match, prefix_to_strip)
 const SUPPORTED_PREFIXES: &[(&str, &str)] = &[
@@ -215,6 +219,20 @@ pub fn match_model_name<'a>(
 
 /// Calculate costs for a slice of token records using pricing data.
 ///
+/// Per record, with the model's matched [`ModelPricing`]:
+///
+/// ```text
+/// input_cost          = input_tokens × input_cost_per_token
+/// output_cost         = output_tokens × output_cost_per_token
+/// cache_read_cost     = cache_read_tokens × cache_read_cost_per_token
+/// cache_creation_cost = cache_creation_5m_tokens × cache_creation_cost_per_token
+///                     + cache_creation_1h_tokens × cache_creation_1h_rate()
+/// ```
+///
+/// then every component × `fast_mode_multiplier` when `speed == "fast"` and
+/// the model has one, then × [`US_INFERENCE_GEO_MULTIPLIER`] when
+/// `inference_geo == "us"`. `total_cost` is the sum of the four.
+///
 /// If `pricing` is None, loads the bundled pricing data.
 /// Warns once per unmatched model name to stderr.
 pub fn calculate_cost(
@@ -240,13 +258,8 @@ pub fn calculate_cost(
             .or_insert_with(|| match_model_name(&record.model, &pricing.models));
         match cached {
             Some(model_pricing) => {
-                let input_cost = record.input_tokens as f64 * model_pricing.input_cost_per_token;
-                let cache_creation_cost = record.cache_creation_tokens as f64
-                    * model_pricing.cache_creation_cost_per_token;
-                let cache_read_cost =
-                    record.cache_read_tokens as f64 * model_pricing.cache_read_cost_per_token;
-                let output_cost = record.output_tokens as f64 * model_pricing.output_cost_per_token;
-
+                let [input_cost, cache_creation_cost, cache_read_cost, output_cost] =
+                    record_costs(record, model_pricing);
                 results.push(PricedTokenRecord::from_token_record(
                     record,
                     input_cost,
@@ -270,6 +283,29 @@ pub fn calculate_cost(
     }
 
     results
+}
+
+/// The four cost components `[input, cache_creation, cache_read, output]`
+/// of one record — see [`calculate_cost`] for the formula.
+fn record_costs(record: &TokenRecord, pricing: &ModelPricing) -> [f64; 4] {
+    let mut costs = [
+        record.input_tokens as f64 * pricing.input_cost_per_token,
+        record.cache_creation_5m_tokens as f64 * pricing.cache_creation_cost_per_token
+            + record.cache_creation_1h_tokens as f64 * pricing.cache_creation_1h_rate(),
+        record.cache_read_tokens as f64 * pricing.cache_read_cost_per_token,
+        record.output_tokens as f64 * pricing.output_cost_per_token,
+    ];
+    if record.speed.as_deref() == Some("fast") {
+        if let Some(m) = pricing.fast_mode_multiplier {
+            costs.iter_mut().for_each(|c| *c *= m);
+        }
+    }
+    if record.inference_geo.as_deref() == Some("us") {
+        costs
+            .iter_mut()
+            .for_each(|c| *c *= US_INFERENCE_GEO_MULTIPLIER);
+    }
+    costs
 }
 
 #[cfg(test)]
@@ -489,9 +525,13 @@ mod tests {
             input_tokens: 1000,
             output_tokens: 500,
             cache_creation_tokens: 100,
+            cache_creation_5m_tokens: 100,
+            cache_creation_1h_tokens: 0,
             cache_read_tokens: 200,
             message_id: None,
             request_id: None,
+            speed: None,
+            inference_geo: None,
         }];
 
         let priced = calculate_cost(&records, Some(&pricing));
@@ -518,9 +558,13 @@ mod tests {
             input_tokens: 1000,
             output_tokens: 500,
             cache_creation_tokens: 0,
+            cache_creation_5m_tokens: 0,
+            cache_creation_1h_tokens: 0,
             cache_read_tokens: 0,
             message_id: None,
             request_id: None,
+            speed: None,
+            inference_geo: None,
         }];
 
         let priced = calculate_cost(&records, Some(&pricing));
@@ -550,9 +594,13 @@ mod tests {
             input_tokens: 1000,
             output_tokens: 500,
             cache_creation_tokens: 0,
+            cache_creation_5m_tokens: 0,
+            cache_creation_1h_tokens: 0,
             cache_read_tokens: 0,
             message_id: None,
             request_id: None,
+            speed: None,
+            inference_geo: None,
         }];
 
         // pricing = None should load bundled
@@ -577,9 +625,13 @@ mod tests {
                 input_tokens: 1000,
                 output_tokens: 500,
                 cache_creation_tokens: 0,
+                cache_creation_5m_tokens: 0,
+                cache_creation_1h_tokens: 0,
                 cache_read_tokens: 0,
                 message_id: None,
                 request_id: None,
+                speed: None,
+                inference_geo: None,
             },
             TokenRecord {
                 timestamp: chrono::Utc::now(),
@@ -592,9 +644,13 @@ mod tests {
                 input_tokens: 2000,
                 output_tokens: 1000,
                 cache_creation_tokens: 0,
+                cache_creation_5m_tokens: 0,
+                cache_creation_1h_tokens: 0,
                 cache_read_tokens: 0,
                 message_id: None,
                 request_id: None,
+                speed: None,
+                inference_geo: None,
             },
         ];
 
@@ -621,9 +677,13 @@ mod tests {
                 input_tokens: 100,
                 output_tokens: 50,
                 cache_creation_tokens: 0,
+                cache_creation_5m_tokens: 0,
+                cache_creation_1h_tokens: 0,
                 cache_read_tokens: 0,
                 message_id: None,
                 request_id: None,
+                speed: None,
+                inference_geo: None,
             },
             TokenRecord {
                 timestamp: chrono::Utc::now(),
@@ -636,9 +696,13 @@ mod tests {
                 input_tokens: 200,
                 output_tokens: 100,
                 cache_creation_tokens: 0,
+                cache_creation_5m_tokens: 0,
+                cache_creation_1h_tokens: 0,
                 cache_read_tokens: 0,
                 message_id: None,
                 request_id: None,
+                speed: None,
+                inference_geo: None,
             },
         ];
 
@@ -667,9 +731,13 @@ mod tests {
             input_tokens: 123,
             output_tokens: 456,
             cache_creation_tokens: 78,
+            cache_creation_5m_tokens: 78,
+            cache_creation_1h_tokens: 0,
             cache_read_tokens: 90,
             message_id: None,
             request_id: None,
+            speed: None,
+            inference_geo: None,
         };
         let pricing = load_pricing();
         let priced = calculate_cost(std::slice::from_ref(&record), Some(&pricing));
@@ -688,6 +756,182 @@ mod tests {
         // total_cost = sum of individual costs
         let expected = p.input_cost + p.cache_creation_cost + p.cache_read_cost + p.output_cost;
         assert!((p.total_cost - expected).abs() < 1e-12);
+    }
+
+    // ── refined cost formula (1h cache write, fast mode, inference geo) ──
+
+    #[allow(clippy::too_many_arguments)]
+    fn usage_record(
+        model: &str,
+        input: u64,
+        output: u64,
+        c5m: u64,
+        c1h: u64,
+        read: u64,
+        speed: Option<&str>,
+        geo: Option<&str>,
+    ) -> TokenRecord {
+        TokenRecord {
+            timestamp: chrono::Utc::now(),
+            model: model.to_string(),
+            session_id: "s1".to_string(),
+            project: "p1".to_string(),
+            agent_id: String::new(),
+            tool_names: String::new(),
+            line: 1,
+            input_tokens: input,
+            output_tokens: output,
+            cache_creation_tokens: c5m + c1h,
+            cache_read_tokens: read,
+            cache_creation_5m_tokens: c5m,
+            cache_creation_1h_tokens: c1h,
+            speed: speed.map(str::to_string),
+            inference_geo: geo.map(str::to_string),
+            message_id: None,
+            request_id: None,
+        }
+    }
+
+    /// Assert (input, cache_creation, cache_read, output, total) costs.
+    fn assert_costs(p: &PricedTokenRecord, expected: [f64; 5]) {
+        let got = [
+            p.input_cost,
+            p.cache_creation_cost,
+            p.cache_read_cost,
+            p.output_cost,
+            p.total_cost,
+        ];
+        for (i, (g, e)) in got.iter().zip(expected.iter()).enumerate() {
+            assert!(
+                (g - e).abs() < 1e-12,
+                "component {i}: got {g}, expected {e}"
+            );
+        }
+    }
+
+    fn price_one(record: TokenRecord) -> PricedTokenRecord {
+        let pricing = load_pricing();
+        calculate_cost(&[record], Some(&pricing)).remove(0)
+    }
+
+    #[test]
+    fn test_cost_1h_split() {
+        // opus-5-5: in 4, out 20, 5m 5, 1h 8, read 0.2 USD/MTok
+        // in 1000×4e-6=0.004; out 500×2e-5=0.01; read 10000×2e-7=0.002;
+        // write 2000×5e-6 + 3000×8e-6 = 0.034; total 0.05
+        let p = price_one(usage_record(
+            "claude-opus-5-5",
+            1000,
+            500,
+            2000,
+            3000,
+            10000,
+            None,
+            None,
+        ));
+        assert_costs(&p, [0.004, 0.034, 0.002, 0.01, 0.05]);
+    }
+
+    #[test]
+    fn test_cost_1h_falls_back_to_twice_input() {
+        // Custom table entry without cacheCreation1hCostPerToken.
+        let pricing = PricingData {
+            fetched_at: String::new(),
+            models: make_pricing(vec![("custom-model-1", 1e-6, 0.0, 1.25e-6, 0.0)]),
+        };
+        let rec = usage_record("custom-model-1", 0, 0, 100, 1000, 0, None, None);
+        let p = calculate_cost(&[rec], Some(&pricing)).remove(0);
+        // 100×1.25e-6 + 1000×2e-6 = 0.000125 + 0.002
+        assert_costs(&p, [0.0, 0.002125, 0.0, 0.0, 0.002125]);
+    }
+
+    #[test]
+    fn test_cost_fast_mode_doubles_on_opus_5_5() {
+        let p = price_one(usage_record(
+            "claude-opus-5-5",
+            1000,
+            500,
+            2000,
+            3000,
+            10000,
+            Some("fast"),
+            None,
+        ));
+        assert_costs(&p, [0.008, 0.068, 0.004, 0.02, 0.1]);
+    }
+
+    #[test]
+    fn test_cost_fast_mode_ignored_without_multiplier() {
+        // sonnet-5-5 has no fastModeMultiplier → unchanged.
+        // in 1000×2e-6=0.002; out 500×1e-5=0.005; read 10000×2e-7=0.002;
+        // write 2000×2.5e-6 + 3000×4e-6 = 0.017; total 0.026
+        let standard = [0.002, 0.017, 0.002, 0.005, 0.026];
+        let p = price_one(usage_record(
+            "claude-sonnet-5-5",
+            1000,
+            500,
+            2000,
+            3000,
+            10000,
+            Some("fast"),
+            None,
+        ));
+        assert_costs(&p, standard);
+        let p = price_one(usage_record(
+            "claude-sonnet-5-5",
+            1000,
+            500,
+            2000,
+            3000,
+            10000,
+            Some("standard"),
+            None,
+        ));
+        assert_costs(&p, standard);
+    }
+
+    #[test]
+    fn test_cost_us_inference_geo() {
+        let p = price_one(usage_record(
+            "claude-sonnet-5-5",
+            1000,
+            500,
+            2000,
+            3000,
+            10000,
+            None,
+            Some("us"),
+        ));
+        assert_costs(&p, [0.0022, 0.0187, 0.0022, 0.0055, 0.0286]);
+        // Any other geo → standard price.
+        let p = price_one(usage_record(
+            "claude-sonnet-5-5",
+            1000,
+            500,
+            2000,
+            3000,
+            10000,
+            None,
+            Some("global"),
+        ));
+        assert_costs(&p, [0.002, 0.017, 0.002, 0.005, 0.026]);
+    }
+
+    #[test]
+    fn test_cost_fast_and_us_stack() {
+        // opus-5-5 standard total 0.05 → ×2 (fast) ×1.1 (us) = 0.11
+        let p = price_one(usage_record(
+            "claude-opus-5-5",
+            1000,
+            500,
+            2000,
+            3000,
+            10000,
+            Some("fast"),
+            Some("us"),
+        ));
+        assert_costs(&p, [0.0088, 0.0748, 0.0044, 0.022, 0.11]);
+        assert_eq!(US_INFERENCE_GEO_MULTIPLIER, 1.1);
     }
 
     #[test]

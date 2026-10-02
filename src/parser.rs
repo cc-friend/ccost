@@ -288,6 +288,38 @@ struct RawUsage {
     cache_creation_input_tokens: Option<u64>,
     #[serde(default)]
     cache_read_input_tokens: Option<u64>,
+    #[serde(default)]
+    cache_creation: Option<RawCacheCreation>,
+    #[serde(default)]
+    speed: Option<String>,
+    #[serde(default)]
+    inference_geo: Option<String>,
+}
+
+/// `usage.cache_creation` — the per-TTL split of `cache_creation_input_tokens`.
+#[derive(Deserialize, Default)]
+struct RawCacheCreation {
+    #[serde(default)]
+    ephemeral_5m_input_tokens: Option<u64>,
+    #[serde(default)]
+    ephemeral_1h_input_tokens: Option<u64>,
+}
+
+/// Split a row's total cache-write tokens into (5-minute, 1-hour) buckets.
+///
+/// Mirrors ccfriend's `calcMessageCost`: without a split every token is 5m;
+/// with one, 1h = `ephemeral_1h` and 5m = `ephemeral_5m` plus whatever part
+/// of the total the split does not account for (never negative).
+fn split_cache_creation(total: u64, split: Option<&RawCacheCreation>) -> (u64, u64) {
+    match split {
+        None => (total, 0),
+        Some(split) => {
+            let c1h = split.ephemeral_1h_input_tokens.unwrap_or(0);
+            let c5m_split = split.ephemeral_5m_input_tokens.unwrap_or(0);
+            let remainder = total.saturating_sub(c5m_split).saturating_sub(c1h);
+            (c5m_split + remainder, c1h)
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -833,6 +865,12 @@ pub fn load_records(options: &LoadOptions) -> LoadResult {
             .and_then(|u| u.cache_creation_input_tokens)
             .unwrap_or(0);
         let cache_read_tokens = usage.and_then(|u| u.cache_read_input_tokens).unwrap_or(0);
+        let (cache_creation_5m_tokens, cache_creation_1h_tokens) = split_cache_creation(
+            cache_creation_tokens,
+            usage.and_then(|u| u.cache_creation.as_ref()),
+        );
+        let speed = usage.and_then(|u| u.speed.clone());
+        let inference_geo = usage.and_then(|u| u.inference_geo.clone());
 
         // Update meta in same pass
         earliest = Some(match earliest {
@@ -870,6 +908,10 @@ pub fn load_records(options: &LoadOptions) -> LoadResult {
             output_tokens,
             cache_creation_tokens,
             cache_read_tokens,
+            cache_creation_5m_tokens,
+            cache_creation_1h_tokens,
+            speed,
+            inference_geo,
             message_id,
             request_id,
         });
@@ -1092,6 +1134,41 @@ mod tests {
         assert_eq!(get_output_tokens(&deduped[0]), 200);
         // The record without requestId passes through
         assert_eq!(get_output_tokens(&deduped[1]), 50);
+    }
+
+    #[test]
+    fn test_split_cache_creation_without_split() {
+        assert_eq!(split_cache_creation(1000, None), (1000, 0));
+    }
+
+    #[test]
+    fn test_split_cache_creation_with_split() {
+        let split = RawCacheCreation {
+            ephemeral_5m_input_tokens: Some(300),
+            ephemeral_1h_input_tokens: Some(700),
+        };
+        assert_eq!(split_cache_creation(1000, Some(&split)), (300, 700));
+    }
+
+    #[test]
+    fn test_split_cache_creation_remainder_billed_as_5m() {
+        // Split accounts for 800 of 1000 → 200 unaccounted go to 5m.
+        let split = RawCacheCreation {
+            ephemeral_5m_input_tokens: Some(100),
+            ephemeral_1h_input_tokens: Some(700),
+        };
+        assert_eq!(split_cache_creation(1000, Some(&split)), (300, 700));
+        // Split over-reports: remainder clamps at 0, split values kept.
+        let split = RawCacheCreation {
+            ephemeral_5m_input_tokens: Some(600),
+            ephemeral_1h_input_tokens: Some(700),
+        };
+        assert_eq!(split_cache_creation(1000, Some(&split)), (600, 700));
+        // Present but empty split object → 1h = 0, everything 5m.
+        assert_eq!(
+            split_cache_creation(50, Some(&RawCacheCreation::default())),
+            (50, 0)
+        );
     }
 
     #[test]

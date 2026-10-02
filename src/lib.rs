@@ -16,7 +16,7 @@ pub use grouper::{get_group_key, group_records, shorten_model_name};
 pub use parser::{deduplicate_streaming, extract_timestamp, load_records};
 pub use pricing::{
     calculate_cost, fetch_litellm_pricing, fetch_live_pricing, load_pricing,
-    load_pricing_from_file, match_model_name,
+    load_pricing_from_file, match_model_name, US_INFERENCE_GEO_MULTIPLIER,
 };
 pub use types::*;
 pub use utils::parse_fixed_offset;

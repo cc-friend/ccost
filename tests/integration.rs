@@ -3726,3 +3726,192 @@ fn test_dedup_skips_records_missing_keys() {
     assert_eq!(loaded.dedup.before, 2);
     assert_eq!(loaded.dedup.after, 2);
 }
+
+// ---------------------------------------------------------------------------
+// Refined usage fields (0.6.0): cache_creation 5m/1h split, speed, inference_geo
+// ---------------------------------------------------------------------------
+
+/// Assistant row with an arbitrary `usage` object.
+fn usage_rec(usage: serde_json::Value, ts: &str, req_id: &str, msg_id: &str) -> serde_json::Value {
+    serde_json::json!({
+        "timestamp": ts,
+        "type": "assistant",
+        "sessionId": "session-abc",
+        "message": {
+            "id": msg_id,
+            "role": "assistant",
+            "model": "claude-opus-5-5",
+            "usage": usage,
+        },
+        "requestId": req_id,
+    })
+}
+
+#[test]
+fn test_refined_usage_row_with_split() {
+    let rec = usage_rec(
+        serde_json::json!({
+            "input_tokens": 10,
+            "output_tokens": 20,
+            "cache_creation_input_tokens": 1000,
+            "cache_read_input_tokens": 5,
+            "cache_creation": {
+                "ephemeral_5m_input_tokens": 400,
+                "ephemeral_1h_input_tokens": 600
+            },
+            "speed": "fast",
+            "inference_geo": "us"
+        }),
+        "2026-09-30T10:00:00Z",
+        "r1",
+        "m1",
+    );
+    let dir = make_fixture(&[rec]);
+    let loaded = load_records(&default_load_opts(dir.path()));
+    assert_eq!(loaded.records.len(), 1);
+    let r = &loaded.records[0];
+    assert_eq!(r.cache_creation_tokens, 1000, "total unchanged");
+    assert_eq!(r.cache_creation_5m_tokens, 400);
+    assert_eq!(r.cache_creation_1h_tokens, 600);
+    assert_eq!(r.speed.as_deref(), Some("fast"));
+    assert_eq!(r.inference_geo.as_deref(), Some("us"));
+}
+
+#[test]
+fn test_refined_usage_row_without_split() {
+    let rec = mock_rec(
+        "claude-opus-4-6",
+        10,
+        20,
+        1000,
+        5,
+        "2026-09-30T10:00:00Z",
+        "r1",
+        "m1",
+    );
+    let dir = make_fixture(&[rec]);
+    let loaded = load_records(&default_load_opts(dir.path()));
+    let r = &loaded.records[0];
+    assert_eq!(r.cache_creation_tokens, 1000);
+    assert_eq!(r.cache_creation_5m_tokens, 1000, "no split → all 5m");
+    assert_eq!(r.cache_creation_1h_tokens, 0);
+    assert_eq!(r.speed, None);
+    assert_eq!(r.inference_geo, None);
+}
+
+#[test]
+fn test_refined_usage_split_not_adding_up_bills_remainder_as_5m() {
+    let rec = usage_rec(
+        serde_json::json!({
+            "input_tokens": 0,
+            "output_tokens": 1,
+            "cache_creation_input_tokens": 1000,
+            "cache_creation": { "ephemeral_1h_input_tokens": 300 }
+        }),
+        "2026-09-30T10:00:00Z",
+        "r1",
+        "m1",
+    );
+    let dir = make_fixture(&[rec]);
+    let loaded = load_records(&default_load_opts(dir.path()));
+    let r = &loaded.records[0];
+    assert_eq!(r.cache_creation_tokens, 1000);
+    assert_eq!(r.cache_creation_1h_tokens, 300);
+    assert_eq!(r.cache_creation_5m_tokens, 700, "unaccounted 700 → 5m");
+}
+
+#[test]
+fn test_refined_usage_dedup_winner_keeps_own_speed_and_geo() {
+    // Same messageId:requestId; the max-output row wins and must carry its
+    // OWN speed / inference_geo / split, not the loser's.
+    let loser = usage_rec(
+        serde_json::json!({
+            "input_tokens": 10,
+            "output_tokens": 5,
+            "cache_creation_input_tokens": 100,
+            "cache_creation": { "ephemeral_5m_input_tokens": 100, "ephemeral_1h_input_tokens": 0 },
+            "speed": "standard",
+            "inference_geo": "global"
+        }),
+        "2026-09-30T10:00:00Z",
+        "r1",
+        "m1",
+    );
+    let winner = usage_rec(
+        serde_json::json!({
+            "input_tokens": 10,
+            "output_tokens": 50,
+            "cache_creation_input_tokens": 100,
+            "cache_creation": { "ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 100 },
+            "speed": "fast",
+            "inference_geo": "us"
+        }),
+        "2026-09-30T10:00:01Z",
+        "r1",
+        "m1",
+    );
+    // Winner first in the file, so "last row wins" would be wrong too.
+    let dir = make_fixture(&[winner, loser]);
+    let loaded = load_records(&default_load_opts(dir.path()));
+    assert_eq!(loaded.records.len(), 1);
+    let r = &loaded.records[0];
+    assert_eq!(r.output_tokens, 50);
+    assert_eq!(r.speed.as_deref(), Some("fast"));
+    assert_eq!(r.inference_geo.as_deref(), Some("us"));
+    assert_eq!(r.cache_creation_1h_tokens, 100);
+    assert_eq!(r.cache_creation_5m_tokens, 0);
+}
+
+#[test]
+fn test_refined_usage_synthetic_rows_still_skipped() {
+    let mut rec = mock_rec(
+        "<synthetic>",
+        0,
+        0,
+        0,
+        0,
+        "2026-09-30T10:00:00Z",
+        "r1",
+        "m1",
+    );
+    rec["message"]["usage"]["speed"] = serde_json::json!("fast");
+    let dir = make_fixture(&[rec]);
+    let loaded = load_records(&default_load_opts(dir.path()));
+    assert!(loaded.records.is_empty());
+}
+
+#[test]
+fn test_refined_usage_end_to_end_cost() {
+    // opus-5-5, 1h split + fast + us, through load → calculate_cost → group.
+    // standard: in 1000×4e-6=0.004, out 500×2e-5=0.01, read 10000×2e-7=0.002,
+    // write 2000×5e-6 + 3000×8e-6 = 0.034 → 0.05; ×2 (fast) ×1.1 (us) = 0.11
+    let rec = usage_rec(
+        serde_json::json!({
+            "input_tokens": 1000,
+            "output_tokens": 500,
+            "cache_creation_input_tokens": 5000,
+            "cache_read_input_tokens": 10000,
+            "cache_creation": {
+                "ephemeral_5m_input_tokens": 2000,
+                "ephemeral_1h_input_tokens": 3000
+            },
+            "speed": "fast",
+            "inference_geo": "us"
+        }),
+        "2026-09-30T10:00:00Z",
+        "r1",
+        "m1",
+    );
+    let dir = make_fixture(&[rec]);
+    let loaded = load_records(&default_load_opts(dir.path()));
+    let priced = calculate_cost(&loaded.records, None);
+    assert!((priced[0].total_cost - 0.11).abs() < 1e-12);
+    assert!((priced[0].cache_creation_cost - 0.0748).abs() < 1e-12);
+    let grouped = group_records(
+        &priced,
+        &[GroupDimension::Model],
+        Some(&default_group_opts()),
+    );
+    assert!((grouped.totals.total_cost - 0.11).abs() < 1e-12);
+    assert_eq!(grouped.totals.cache_creation_tokens, 5000);
+}

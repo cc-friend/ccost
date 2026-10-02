@@ -17,8 +17,22 @@ pub struct TokenRecord {
     pub line: u32,
     pub input_tokens: u64,
     pub output_tokens: u64,
+    /// Total prompt-cache write tokens (`usage.cache_creation_input_tokens`)
+    /// = `cache_creation_5m_tokens + cache_creation_1h_tokens` whenever the
+    /// usage row's split adds up (see `cache_creation_5m_tokens`).
     pub cache_creation_tokens: u64,
     pub cache_read_tokens: u64,
+    /// 5-minute cache write tokens: `usage.cache_creation.ephemeral_5m_input_tokens`
+    /// plus any part of the total the split does not account for. Equals
+    /// `cache_creation_tokens` for rows without a `cache_creation` split.
+    pub cache_creation_5m_tokens: u64,
+    /// 1-hour cache write tokens (`usage.cache_creation.ephemeral_1h_input_tokens`,
+    /// 0 when absent). Billed at [`ModelPricing::cache_creation_1h_rate`].
+    pub cache_creation_1h_tokens: u64,
+    /// `usage.speed` (e.g. `"fast"` for fast mode, `"standard"`), if present.
+    pub speed: Option<String>,
+    /// `usage.inference_geo` (e.g. `"us"`, `"global"`), if present.
+    pub inference_geo: Option<String>,
     /// Anthropic-assigned message id (`message.id` in the JSONL). `None` only
     /// for records that omit it. Together with `request_id`, this is the
     /// dedup key — stable across re-emits and safe as a cross-tool join key.
@@ -40,6 +54,10 @@ pub struct PricedTokenRecord {
     pub output_tokens: u64,
     pub cache_creation_tokens: u64,
     pub cache_read_tokens: u64,
+    pub cache_creation_5m_tokens: u64,
+    pub cache_creation_1h_tokens: u64,
+    pub speed: Option<String>,
+    pub inference_geo: Option<String>,
     pub message_id: Option<String>,
     pub request_id: Option<String>,
     pub input_cost: f64,
@@ -69,6 +87,10 @@ impl PricedTokenRecord {
             output_tokens: record.output_tokens,
             cache_creation_tokens: record.cache_creation_tokens,
             cache_read_tokens: record.cache_read_tokens,
+            cache_creation_5m_tokens: record.cache_creation_5m_tokens,
+            cache_creation_1h_tokens: record.cache_creation_1h_tokens,
+            speed: record.speed.clone(),
+            inference_geo: record.inference_geo.clone(),
             message_id: record.message_id.clone(),
             request_id: record.request_id.clone(),
             input_cost,
@@ -482,9 +504,13 @@ mod tests {
             input_tokens: 100,
             output_tokens: 50,
             cache_creation_tokens: 10,
+            cache_creation_5m_tokens: 10,
+            cache_creation_1h_tokens: 0,
             cache_read_tokens: 5,
             message_id: Some("msg-id".to_string()),
             request_id: Some("req-id".to_string()),
+            speed: None,
+            inference_geo: None,
         };
 
         let priced = PricedTokenRecord::from_token_record(&record, 0.01, 0.02, 0.003, 0.04);
