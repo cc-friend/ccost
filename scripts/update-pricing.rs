@@ -1,8 +1,14 @@
 /// Fetch latest pricing from LiteLLM and overwrite src/pricing-data.json.
 ///
+/// Only the LiteLLM snapshot is rewritten. Hand-maintained official
+/// Anthropic entries (new models, undated aliases, 1-hour cache-write
+/// rates, fast-mode multipliers, `<synthetic>`) live in
+/// `src/pricing-overrides.json`, which `load_pricing()` merges on top of
+/// this file — edit that one by hand when Anthropic changes prices.
+///
 /// Usage: cargo run --bin update-pricing
 fn main() {
-    match ccost::fetch_live_pricing() {
+    match ccost::fetch_litellm_pricing() {
         Ok(pricing) => {
             let sorted: std::collections::BTreeMap<_, _> = pricing.models.into_iter().collect();
             let count = sorted.len();

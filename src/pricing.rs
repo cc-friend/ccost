@@ -20,34 +20,72 @@ const SUPPORTED_PREFIXES: &[(&str, &str)] = &[
     ("zai/glm-", "zai/"),
 ];
 
-/// Load bundled pricing data embedded at compile time.
+/// Merge `overlay` on top of `base`: every overlay model replaces the base
+/// entry of the same key (whole-entry replace), base-only models are kept.
+/// `fetched_at` becomes the newer of the two ISO-8601 strings (plain string
+/// comparison — valid for the `…Z` UTC timestamps both sources use).
+fn merge_pricing(mut base: PricingData, overlay: PricingData) -> PricingData {
+    base.models.extend(overlay.models);
+    if overlay.fetched_at > base.fetched_at {
+        base.fetched_at = overlay.fetched_at;
+    }
+    base
+}
+
+/// Hand-maintained official Anthropic prices (`src/pricing-overrides.json`),
+/// embedded at compile time. Covers models newer than the LiteLLM snapshot,
+/// undated aliases, the 1-hour cache-write rate, fast-mode multipliers and a
+/// zero-rate `<synthetic>` entry.
+fn load_pricing_overrides() -> PricingData {
+    let data = include_str!("pricing-overrides.json");
+    serde_json::from_str(data).expect("Failed to parse bundled pricing-overrides.json")
+}
+
+/// Load the bundled LiteLLM snapshot (`src/pricing-data.json`) with the
+/// official overrides (`src/pricing-overrides.json`) merged on top — the
+/// override wins for any model present in both.
 pub fn load_pricing() -> PricingData {
     let data = include_str!("pricing-data.json");
-    serde_json::from_str(data).expect("Failed to parse bundled pricing-data.json")
+    let litellm: PricingData =
+        serde_json::from_str(data).expect("Failed to parse bundled pricing-data.json");
+    merge_pricing(litellm, load_pricing_overrides())
 }
 
 /// Load pricing data from a user-provided JSON file path.
+///
+/// Precedence (highest last): bundled LiteLLM snapshot < bundled overrides
+/// < this file. A model in the user file replaces the whole entry. A
+/// non-empty user `fetchedAt` replaces the bundled one.
 pub fn load_pricing_from_file(file_path: &str) -> Result<PricingData, Box<dyn std::error::Error>> {
     let contents = fs::read_to_string(file_path)?;
     let user: PricingData = serde_json::from_str(&contents)?;
     let mut pricing = load_pricing();
     // User overrides take precedence over bundled defaults
-    for (key, value) in user.models {
-        pricing.models.insert(key, value);
-    }
+    pricing.models.extend(user.models);
     if !user.fetched_at.is_empty() {
         pricing.fetched_at = user.fetched_at;
     }
     Ok(pricing)
 }
 
-/// Fetch live pricing data from the LiteLLM repository on GitHub.
+/// Fetch live pricing data from the LiteLLM repository on GitHub, with the
+/// bundled official overrides merged on top (so hand-maintained Anthropic
+/// entries always beat LiteLLM's).
+pub fn fetch_live_pricing() -> Result<PricingData, Box<dyn std::error::Error>> {
+    Ok(merge_pricing(
+        fetch_litellm_pricing()?,
+        load_pricing_overrides(),
+    ))
+}
+
+/// Fetch the raw LiteLLM pricing table from GitHub — no overrides applied.
+/// Used by `scripts/update-pricing.rs` to refresh `src/pricing-data.json`.
 ///
 /// Thin IO wrapper over [`parse_litellm_pricing`] — fetches the
 /// upstream JSON and hands it off. Kept tiny so almost all of the
 /// "interesting" logic lives in the pure parser, which is unit-tested
 /// against synthetic LiteLLM JSON without any network dependency.
-pub fn fetch_live_pricing() -> Result<PricingData, Box<dyn std::error::Error>> {
+pub fn fetch_litellm_pricing() -> Result<PricingData, Box<dyn std::error::Error>> {
     let url = "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json";
     let resp = minreq::get(url).send()?;
     let raw: serde_json::Value = serde_json::from_str(resp.as_str()?)?;
@@ -120,6 +158,7 @@ pub fn parse_litellm_pricing(
                 output_cost_per_token: output_cost,
                 cache_creation_cost_per_token: cache_creation_cost,
                 cache_read_cost_per_token: cache_read_cost,
+                ..Default::default()
             },
         );
     }
@@ -249,6 +288,7 @@ mod tests {
                         output_cost_per_token: out,
                         cache_creation_cost_per_token: cc,
                         cache_read_cost_per_token: cr,
+                        ..Default::default()
                     },
                 )
             })
@@ -940,6 +980,139 @@ mod tests {
         assert!(pricing.models.contains_key("glm-4.7"));
         assert!(!pricing.models.contains_key("gpt-4o"));
         assert!(!pricing.models.contains_key("context-only-no-pricing"));
+    }
+
+    // ── pricing overrides ───────────────────────────────────────────────
+
+    fn assert_rates(p: &ModelPricing, rates: [f64; 5], name: &str) {
+        // (input, output, 5m write, 1h write, read)
+        assert_eq!(p.input_cost_per_token, rates[0], "{name} input");
+        assert_eq!(p.output_cost_per_token, rates[1], "{name} output");
+        assert_eq!(p.cache_creation_cost_per_token, rates[2], "{name} 5m write");
+        assert_eq!(p.cache_creation_1h_rate(), rates[3], "{name} 1h write");
+        assert_eq!(p.cache_read_cost_per_token, rates[4], "{name} read");
+    }
+
+    #[test]
+    fn test_load_pricing_includes_overrides() {
+        let pricing = load_pricing();
+        let opus = &pricing.models["claude-opus-5-5"];
+        assert_rates(opus, [4e-6, 2e-5, 5e-6, 8e-6, 2e-7], "opus-5-5");
+        assert_eq!(opus.fast_mode_multiplier, Some(2.0));
+        assert_rates(
+            &pricing.models["claude-fable-5-1"],
+            [1e-5, 5e-5, 1.25e-5, 2e-5, 2.5e-7],
+            "fable-5-1",
+        );
+        assert_rates(
+            &pricing.models["claude-mythos-5"],
+            [1e-5, 5e-5, 1.25e-5, 2e-5, 1e-6],
+            "mythos-5",
+        );
+        assert_rates(
+            &pricing.models["claude-sonnet-5-5"],
+            [2e-6, 1e-5, 2.5e-6, 4e-6, 2e-7],
+            "sonnet-5-5",
+        );
+        assert_rates(
+            &pricing.models["claude-sonnet-4-6"],
+            [3e-6, 1.5e-5, 3.75e-6, 6e-6, 3e-7],
+            "sonnet-4-6",
+        );
+        assert_rates(
+            &pricing.models["claude-haiku-4-5"],
+            [1e-6, 5e-6, 1.25e-6, 2e-6, 1e-7],
+            "haiku-4-5",
+        );
+        for m in ["claude-opus-5", "claude-opus-4-8"] {
+            assert_eq!(pricing.models[m].fast_mode_multiplier, Some(2.0), "{m}");
+        }
+        for m in ["claude-opus-4-7", "claude-sonnet-5-5", "claude-fable-5-1"] {
+            assert_eq!(pricing.models[m].fast_mode_multiplier, None, "{m}");
+        }
+        // Overrides fetchedAt (2026-09-30) is newer than the LiteLLM snapshot.
+        assert_eq!(pricing.fetched_at, "2026-09-30T00:00:00.000Z");
+    }
+
+    #[test]
+    fn test_overrides_beat_bundled_litellm_entries() {
+        // claude-opus-4-6 exists in both tables; the override must win
+        // (and carry the 1h field LiteLLM entries never have).
+        let pricing = load_pricing();
+        let p = &pricing.models["claude-opus-4-6"];
+        assert_rates(p, [5e-6, 2.5e-5, 6.25e-6, 1e-5, 5e-7], "opus-4-6");
+        assert_eq!(p.cache_creation_1h_cost_per_token, Some(1e-5));
+    }
+
+    #[test]
+    fn test_synthetic_resolves_to_zero() {
+        let pricing = load_pricing();
+        let p = match_model_name("<synthetic>", &pricing.models).expect("<synthetic> entry");
+        assert_rates(p, [0.0; 5], "<synthetic>");
+    }
+
+    #[test]
+    fn test_user_file_beats_overrides() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("pricing.json");
+        let json = serde_json::json!({
+            "models": {
+                "claude-opus-5-5": {
+                    "inputCostPerToken": 1.0,
+                    "outputCostPerToken": 2.0,
+                    "cacheCreationCostPerToken": 3.0,
+                    "cacheReadCostPerToken": 4.0
+                }
+            }
+        });
+        std::fs::write(&path, serde_json::to_string(&json).unwrap()).unwrap();
+        let pricing = load_pricing_from_file(path.to_str().unwrap()).unwrap();
+        let p = &pricing.models["claude-opus-5-5"];
+        // Whole-entry replace: the user entry has no 1h/fast fields.
+        assert_eq!(p.input_cost_per_token, 1.0);
+        assert_eq!(p.fast_mode_multiplier, None);
+        assert_eq!(p.cache_creation_1h_rate(), 2.0);
+        // Other override entries are untouched.
+        assert_eq!(pricing.models["claude-opus-5"].input_cost_per_token, 5e-6);
+    }
+
+    #[test]
+    fn test_merge_pricing_fetched_at_takes_newer() {
+        let mk = |at: &str| PricingData {
+            fetched_at: at.to_string(),
+            models: HashMap::new(),
+        };
+        let merged = merge_pricing(
+            mk("2026-06-12T00:00:00.000Z"),
+            mk("2026-09-30T00:00:00.000Z"),
+        );
+        assert_eq!(merged.fetched_at, "2026-09-30T00:00:00.000Z");
+        let merged = merge_pricing(
+            mk("2026-10-01T12:00:00.000Z"),
+            mk("2026-09-30T00:00:00.000Z"),
+        );
+        assert_eq!(merged.fetched_at, "2026-10-01T12:00:00.000Z");
+    }
+
+    #[test]
+    fn test_merge_pricing_overlay_wins() {
+        let entry = |v: f64| ModelPricing {
+            input_cost_per_token: v,
+            ..Default::default()
+        };
+        let base = PricingData {
+            fetched_at: String::new(),
+            models: HashMap::from([("a".to_string(), entry(1.0)), ("b".to_string(), entry(2.0))]),
+        };
+        let overlay = PricingData {
+            fetched_at: String::new(),
+            models: HashMap::from([("b".to_string(), entry(9.0)), ("c".to_string(), entry(3.0))]),
+        };
+        let merged = merge_pricing(base, overlay);
+        assert_eq!(merged.models.len(), 3);
+        assert_eq!(merged.models["a"].input_cost_per_token, 1.0);
+        assert_eq!(merged.models["b"].input_cost_per_token, 9.0);
+        assert_eq!(merged.models["c"].input_cost_per_token, 3.0);
     }
 
     #[test]

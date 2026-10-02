@@ -15,7 +15,8 @@ pub use formatters::table::{format_cost, format_table, format_tokens, format_txt
 pub use grouper::{get_group_key, group_records, shorten_model_name};
 pub use parser::{deduplicate_streaming, extract_timestamp, load_records};
 pub use pricing::{
-    calculate_cost, fetch_live_pricing, load_pricing, load_pricing_from_file, match_model_name,
+    calculate_cost, fetch_litellm_pricing, fetch_live_pricing, load_pricing,
+    load_pricing_from_file, match_model_name,
 };
 pub use types::*;
 pub use utils::parse_fixed_offset;

@@ -97,13 +97,37 @@ pub struct GroupedData {
     pub children: Option<Vec<GroupedData>>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Per-token USD rates for one model.
+///
+/// `cache_creation_cost_per_token` is the **5-minute** prompt-cache write
+/// rate. The two optional fields are omitted from JSON when `None`, so
+/// pricing files written before 0.6.0 round-trip unchanged.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelPricing {
     pub cache_creation_cost_per_token: f64,
     pub cache_read_cost_per_token: f64,
     pub input_cost_per_token: f64,
     pub output_cost_per_token: f64,
+    /// 1-hour prompt-cache write rate (`cacheCreation1hCostPerToken`).
+    /// `None` → [`ModelPricing::cache_creation_1h_rate`] falls back to
+    /// `2 × input_cost_per_token` (Anthropic's 1h write multiplier).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_creation_1h_cost_per_token: Option<f64>,
+    /// Multiplier applied to every cost component of a record whose
+    /// `usage.speed == "fast"` (`fastModeMultiplier`). `None` → the model
+    /// has no fast-mode pricing and the flag is ignored.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fast_mode_multiplier: Option<f64>,
+}
+
+impl ModelPricing {
+    /// Effective 1-hour cache write rate: the explicit field when present,
+    /// otherwise `2 × input_cost_per_token`.
+    pub fn cache_creation_1h_rate(&self) -> f64 {
+        self.cache_creation_1h_cost_per_token
+            .unwrap_or(2.0 * self.input_cost_per_token)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -485,6 +509,57 @@ mod tests {
         // total_cost = sum of all four components
         let expected_total = 0.01 + 0.02 + 0.003 + 0.04;
         assert!((priced.total_cost - expected_total).abs() < 1e-10);
+    }
+
+    // --- ModelPricing optional fields ---
+
+    #[test]
+    fn test_model_pricing_deserializes_without_optional_fields() {
+        let p: ModelPricing = serde_json::from_str(
+            r#"{"inputCostPerToken":3e-6,"outputCostPerToken":1.5e-5,
+                "cacheCreationCostPerToken":3.75e-6,"cacheReadCostPerToken":3e-7}"#,
+        )
+        .unwrap();
+        assert_eq!(p.cache_creation_1h_cost_per_token, None);
+        assert_eq!(p.fast_mode_multiplier, None);
+        // Fallback 1h rate = 2 × input.
+        assert!((p.cache_creation_1h_rate() - 6e-6).abs() < 1e-18);
+    }
+
+    #[test]
+    fn test_model_pricing_deserializes_optional_fields() {
+        let p: ModelPricing = serde_json::from_str(
+            r#"{"inputCostPerToken":4e-6,"outputCostPerToken":2e-5,
+                "cacheCreationCostPerToken":5e-6,"cacheReadCostPerToken":2e-7,
+                "cacheCreation1hCostPerToken":9e-6,"fastModeMultiplier":2}"#,
+        )
+        .unwrap();
+        assert_eq!(p.cache_creation_1h_cost_per_token, Some(9e-6));
+        assert_eq!(p.fast_mode_multiplier, Some(2.0));
+        // Explicit field wins over the 2 × input fallback.
+        assert_eq!(p.cache_creation_1h_rate(), 9e-6);
+    }
+
+    #[test]
+    fn test_model_pricing_serializes_without_none_fields() {
+        let p = ModelPricing {
+            input_cost_per_token: 1e-6,
+            ..Default::default()
+        };
+        let v = serde_json::to_value(&p).unwrap();
+        let obj = v.as_object().unwrap();
+        assert_eq!(obj.len(), 4, "None fields must be omitted: {v}");
+        assert!(!obj.contains_key("cacheCreation1hCostPerToken"));
+        assert!(!obj.contains_key("fastModeMultiplier"));
+
+        let p = ModelPricing {
+            cache_creation_1h_cost_per_token: Some(2e-6),
+            fast_mode_multiplier: Some(2.0),
+            ..p
+        };
+        let v = serde_json::to_value(&p).unwrap();
+        assert_eq!(v["cacheCreation1hCostPerToken"], serde_json::json!(2e-6));
+        assert_eq!(v["fastModeMultiplier"], serde_json::json!(2.0));
     }
 
     // --- GroupOptions::default ---

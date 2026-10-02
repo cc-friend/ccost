@@ -1,0 +1,120 @@
+{
+  "fetchedAt": "2026-09-30T00:00:00.000Z",
+  "models": {
+    "<synthetic>": {
+      "cacheCreation1hCostPerToken": 0,
+      "cacheCreationCostPerToken": 0,
+      "cacheReadCostPerToken": 0,
+      "inputCostPerToken": 0,
+      "outputCostPerToken": 0
+    },
+    "claude-fable-5": {
+      "cacheCreation1hCostPerToken": 2e-05,
+      "cacheCreationCostPerToken": 1.25e-05,
+      "cacheReadCostPerToken": 1e-06,
+      "inputCostPerToken": 1e-05,
+      "outputCostPerToken": 5e-05
+    },
+    "claude-fable-5-1": {
+      "cacheCreation1hCostPerToken": 2e-05,
+      "cacheCreationCostPerToken": 1.25e-05,
+      "cacheReadCostPerToken": 2.5e-07,
+      "inputCostPerToken": 1e-05,
+      "outputCostPerToken": 5e-05
+    },
+    "claude-haiku-4-5": {
+      "cacheCreation1hCostPerToken": 2e-06,
+      "cacheCreationCostPerToken": 1.25e-06,
+      "cacheReadCostPerToken": 1e-07,
+      "inputCostPerToken": 1e-06,
+      "outputCostPerToken": 5e-06
+    },
+    "claude-mythos-5": {
+      "cacheCreation1hCostPerToken": 2e-05,
+      "cacheCreationCostPerToken": 1.25e-05,
+      "cacheReadCostPerToken": 1e-06,
+      "inputCostPerToken": 1e-05,
+      "outputCostPerToken": 5e-05
+    },
+    "claude-mythos-5-1": {
+      "cacheCreation1hCostPerToken": 2e-05,
+      "cacheCreationCostPerToken": 1.25e-05,
+      "cacheReadCostPerToken": 2.5e-07,
+      "inputCostPerToken": 1e-05,
+      "outputCostPerToken": 5e-05
+    },
+    "claude-opus-4-5": {
+      "cacheCreation1hCostPerToken": 1e-05,
+      "cacheCreationCostPerToken": 6.25e-06,
+      "cacheReadCostPerToken": 5e-07,
+      "inputCostPerToken": 5e-06,
+      "outputCostPerToken": 2.5e-05
+    },
+    "claude-opus-4-6": {
+      "cacheCreation1hCostPerToken": 1e-05,
+      "cacheCreationCostPerToken": 6.25e-06,
+      "cacheReadCostPerToken": 5e-07,
+      "inputCostPerToken": 5e-06,
+      "outputCostPerToken": 2.5e-05
+    },
+    "claude-opus-4-7": {
+      "cacheCreation1hCostPerToken": 1e-05,
+      "cacheCreationCostPerToken": 6.25e-06,
+      "cacheReadCostPerToken": 5e-07,
+      "inputCostPerToken": 5e-06,
+      "outputCostPerToken": 2.5e-05
+    },
+    "claude-opus-4-8": {
+      "cacheCreation1hCostPerToken": 1e-05,
+      "cacheCreationCostPerToken": 6.25e-06,
+      "cacheReadCostPerToken": 5e-07,
+      "inputCostPerToken": 5e-06,
+      "outputCostPerToken": 2.5e-05,
+      "fastModeMultiplier": 2
+    },
+    "claude-opus-5": {
+      "cacheCreation1hCostPerToken": 1e-05,
+      "cacheCreationCostPerToken": 6.25e-06,
+      "cacheReadCostPerToken": 5e-07,
+      "inputCostPerToken": 5e-06,
+      "outputCostPerToken": 2.5e-05,
+      "fastModeMultiplier": 2
+    },
+    "claude-opus-5-5": {
+      "cacheCreation1hCostPerToken": 8e-06,
+      "cacheCreationCostPerToken": 5e-06,
+      "cacheReadCostPerToken": 2e-07,
+      "inputCostPerToken": 4e-06,
+      "outputCostPerToken": 2e-05,
+      "fastModeMultiplier": 2
+    },
+    "claude-sonnet-4-5": {
+      "cacheCreation1hCostPerToken": 6e-06,
+      "cacheCreationCostPerToken": 3.75e-06,
+      "cacheReadCostPerToken": 3e-07,
+      "inputCostPerToken": 3e-06,
+      "outputCostPerToken": 1.5e-05
+    },
+    "claude-sonnet-4-6": {
+      "cacheCreation1hCostPerToken": 6e-06,
+      "cacheCreationCostPerToken": 3.75e-06,
+      "cacheReadCostPerToken": 3e-07,
+      "inputCostPerToken": 3e-06,
+      "outputCostPerToken": 1.5e-05
+    },
+    "claude-sonnet-5": {
+      "cacheCreation1hCostPerToken": 4e-06,
+      "cacheCreationCostPerToken": 2.5e-06,
+      "cacheReadCostPerToken": 2e-07,
+      "inputCostPerToken": 2e-06,
+      "outputCostPerToken": 1e-05
+    },
+    "claude-sonnet-5-5": {
+      "cacheCreation1hCostPerToken": 4e-06,
+      "cacheCreationCostPerToken": 2.5e-06,
+      "cacheReadCostPerToken": 2e-07,
+      "inputCostPerToken": 2e-06,
+      "outputCostPerToken": 1e-05
+    }
+  }
+}
