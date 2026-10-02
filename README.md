@@ -104,7 +104,7 @@ Granularity auto-selects based on range (hour/day/month). Only `--output txt` wo
 | Flag | Description |
 |------|-------------|
 | `--live-pricing` | Fetch latest from LiteLLM (requires network). The bundled official Anthropic overrides are still applied on top. |
-| `--pricing-data <path>` | Custom pricing JSON file, merged over the bundled pricing (each model entry replaces the bundled one). See [Pricing](#pricing-1). |
+| `--pricing-data <path>` | Custom pricing JSON file, merged over the bundled pricing (each model entry replaces the bundled one's four base rates; omitted optional 1h/fast fields are inherited). See [Pricing](#pricing-1). |
 
 ### Other
 
