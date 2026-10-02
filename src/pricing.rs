@@ -62,14 +62,28 @@ pub fn load_pricing() -> PricingData {
 /// Load pricing data from a user-provided JSON file path.
 ///
 /// Precedence (highest last): bundled LiteLLM snapshot < bundled overrides
-/// < this file. A model in the user file replaces the whole entry. A
-/// non-empty user `fetchedAt` replaces the bundled one.
+/// < this file. A model in the user file replaces the entry's four base
+/// rates; when the user entry omits `cacheCreation1hCostPerToken` /
+/// `fastModeMultiplier` and the bundled table has an entry under the same
+/// key, those optional fields are inherited from it (so a pre-0.6 user file
+/// keeps fast mode and the official 1h rate). A non-empty user `fetchedAt`
+/// replaces the bundled one.
 pub fn load_pricing_from_file(file_path: &str) -> Result<PricingData, Box<dyn std::error::Error>> {
     let contents = fs::read_to_string(file_path)?;
     let user: PricingData = serde_json::from_str(&contents)?;
     let mut pricing = load_pricing();
     // User overrides take precedence over bundled defaults
-    pricing.models.extend(user.models);
+    for (model, mut entry) in user.models {
+        if let Some(bundled) = pricing.models.get(&model) {
+            if entry.cache_creation_1h_cost_per_token.is_none() {
+                entry.cache_creation_1h_cost_per_token = bundled.cache_creation_1h_cost_per_token;
+            }
+            if entry.fast_mode_multiplier.is_none() {
+                entry.fast_mode_multiplier = bundled.fast_mode_multiplier;
+            }
+        }
+        pricing.models.insert(model, entry);
+    }
     if !user.fetched_at.is_empty() {
         pricing.fetched_at = user.fetched_at;
     }
@@ -1447,12 +1461,62 @@ mod tests {
         std::fs::write(&path, serde_json::to_string(&json).unwrap()).unwrap();
         let pricing = load_pricing_from_file(path.to_str().unwrap()).unwrap();
         let p = &pricing.models["claude-opus-5-5"];
-        // Whole-entry replace: the user entry has no 1h/fast fields.
+        // The user's base rates win…
         assert_eq!(p.input_cost_per_token, 1.0);
-        assert_eq!(p.fast_mode_multiplier, None);
-        assert_eq!(p.cache_creation_1h_rate(), 2.0);
+        assert_eq!(p.output_cost_per_token, 2.0);
+        assert_eq!(p.cache_creation_cost_per_token, 3.0);
+        assert_eq!(p.cache_read_cost_per_token, 4.0);
+        // …and the optional fields the entry omits are inherited from the
+        // bundled entry of the same key.
+        assert_eq!(p.fast_mode_multiplier, Some(2.0));
+        assert_eq!(p.cache_creation_1h_cost_per_token, Some(8e-6));
         // Other override entries are untouched.
         assert_eq!(pricing.models["claude-opus-5"].input_cost_per_token, 5e-6);
+    }
+
+    #[test]
+    fn test_user_file_explicit_optional_fields_win() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("pricing.json");
+        let json = serde_json::json!({
+            "models": {
+                "claude-opus-5-5": {
+                    "inputCostPerToken": 1.0,
+                    "outputCostPerToken": 2.0,
+                    "cacheCreationCostPerToken": 3.0,
+                    "cacheReadCostPerToken": 4.0,
+                    "cacheCreation1hCostPerToken": 5.0,
+                    "fastModeMultiplier": 3.0
+                }
+            }
+        });
+        std::fs::write(&path, serde_json::to_string(&json).unwrap()).unwrap();
+        let pricing = load_pricing_from_file(path.to_str().unwrap()).unwrap();
+        let p = &pricing.models["claude-opus-5-5"];
+        assert_eq!(p.fast_mode_multiplier, Some(3.0));
+        assert_eq!(p.cache_creation_1h_cost_per_token, Some(5.0));
+    }
+
+    #[test]
+    fn test_user_file_new_key_does_not_inherit() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("pricing.json");
+        let json = serde_json::json!({
+            "models": {
+                "my-custom-model": {
+                    "inputCostPerToken": 1.0,
+                    "outputCostPerToken": 2.0,
+                    "cacheCreationCostPerToken": 3.0,
+                    "cacheReadCostPerToken": 4.0
+                }
+            }
+        });
+        std::fs::write(&path, serde_json::to_string(&json).unwrap()).unwrap();
+        let pricing = load_pricing_from_file(path.to_str().unwrap()).unwrap();
+        let p = &pricing.models["my-custom-model"];
+        assert_eq!(p.fast_mode_multiplier, None);
+        assert_eq!(p.cache_creation_1h_cost_per_token, None);
+        assert_eq!(p.cache_creation_1h_rate(), 2.0);
     }
 
     #[test]
