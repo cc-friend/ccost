@@ -4,6 +4,13 @@ on:
   push:
     tags:
       - "v*"
+  # Re-run only the npm publish for an existing release (e.g. after a
+  # failed npm step): gh workflow run release.yml -f tag=v0.6.0
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to publish to npm (e.g. v0.6.0)
+        required: true
 
 permissions:
   contents: write
@@ -14,6 +21,7 @@ env:
 jobs:
   build:
     name: Build ${{ matrix.name }}
+    if: github.event_name == 'push'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -104,6 +112,7 @@ jobs:
   release:
     name: Create GitHub Release
     needs: build
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -125,6 +134,7 @@ jobs:
   publish-crates:
     name: Publish to crates.io
     needs: build
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -136,6 +146,7 @@ jobs:
   publish-npm:
     name: Publish to npm
     needs: release
+    if: always() && (needs.release.result == 'success' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -145,15 +156,18 @@ jobs:
 
       - uses: actions/setup-node@v5
         with:
-          node-version: "20"
+          node-version: "24"
           registry-url: "https://registry.npmjs.org"
 
-      # Trusted Publishing (OIDC) requires npm >= 11.5.1
+      # Trusted Publishing (OIDC) requires npm >= 11.5.1; npm 12 needs Node >= 22.
       - run: npm install -g npm@latest
 
       - name: Set version and publish
         working-directory: npm
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
         run: |
-          VERSION=${GITHUB_REF_NAME#v}
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.]+)?$ ]] || { echo "bad tag: $TAG"; exit 1; }
+          VERSION=${TAG#v}
           npm version "$VERSION" --no-git-tag-version
           npm publish --provenance
