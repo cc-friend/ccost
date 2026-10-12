@@ -3915,3 +3915,105 @@ fn test_refined_usage_end_to_end_cost() {
     assert!((grouped.totals.total_cost - 0.11).abs() < 1e-12);
     assert_eq!(grouped.totals.cache_creation_tokens, 5000);
 }
+
+// ---------------------------------------------------------------------------
+// Advisor sub-requests (`usage.iterations[type=advisor_message]`)
+// ---------------------------------------------------------------------------
+
+fn advisor_rec() -> serde_json::Value {
+    serde_json::json!({
+        "timestamp": "2026-10-10T10:00:00Z",
+        "type": "assistant",
+        "sessionId": "session-abc",
+        "message": {
+            "id": "msg_adv",
+            "role": "assistant",
+            "model": "claude-opus-5-5",
+            "content": [{"type": "server_tool_use", "name": "advisor", "id": "srvtoolu_1", "input": {}}],
+            "usage": {
+                "input_tokens": 4,
+                "output_tokens": 619,
+                "cache_creation_input_tokens": 3059,
+                "cache_read_input_tokens": 134893,
+                "cache_creation": {"ephemeral_5m_input_tokens": 1748, "ephemeral_1h_input_tokens": 1311},
+                "speed": "standard",
+                "iterations": [
+                    {"type": "message", "input_tokens": 2, "output_tokens": 211,
+                     "cache_read_input_tokens": 66791, "cache_creation_input_tokens": 1311,
+                     "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 1311}},
+                    {"type": "advisor_message", "model": "claude-fable-5-1",
+                     "input_tokens": 64651, "output_tokens": 6041,
+                     "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0,
+                     "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0}},
+                    {"type": "message", "input_tokens": 2, "output_tokens": 408,
+                     "cache_read_input_tokens": 68102, "cache_creation_input_tokens": 1748,
+                     "cache_creation": {"ephemeral_5m_input_tokens": 1748, "ephemeral_1h_input_tokens": 0}}
+                ]
+            }
+        },
+        "requestId": "req_adv",
+    })
+}
+
+#[test]
+fn test_advisor_iteration_becomes_its_own_record() {
+    let dir = make_fixture(&[advisor_rec()]);
+    let result = load_records(&default_load_opts(dir.path()));
+    assert_eq!(result.records.len(), 2);
+
+    let main = &result.records[0];
+    assert!(!main.advisor);
+    assert_eq!(main.model, "claude-opus-5-5");
+    assert_eq!(main.input_tokens, 4);
+    assert_eq!(main.output_tokens, 619);
+
+    let adv = &result.records[1];
+    assert!(adv.advisor);
+    assert_eq!(adv.model, "claude-fable-5-1");
+    assert_eq!(adv.input_tokens, 64651);
+    assert_eq!(adv.output_tokens, 6041);
+    assert_eq!(adv.cache_creation_tokens, 0);
+    assert_eq!(adv.cache_read_tokens, 0);
+    assert_eq!(adv.line, main.line);
+    assert_eq!(adv.message_id, main.message_id);
+    assert_eq!(adv.request_id, main.request_id);
+    assert_eq!(adv.tool_names, "");
+    assert!(result.meta.models.contains(&"claude-fable-5-1".to_string()));
+
+    // fable-5-1: in 10, out 50 USD/MTok → 0.64651 + 0.30205 = 0.94856
+    let priced = calculate_cost(&result.records, None);
+    assert!(approx_eq(priced[1].total_cost, 0.94856));
+}
+
+#[test]
+fn test_advisor_record_obeys_model_filter() {
+    let dir = make_fixture(&[advisor_rec()]);
+    let opts = LoadOptions {
+        model: Some("fable".to_string()),
+        ..default_load_opts(dir.path())
+    };
+    let result = load_records(&opts);
+    assert_eq!(result.records.len(), 1);
+    assert!(result.records[0].advisor);
+    assert_eq!(result.meta.models, vec!["claude-fable-5-1".to_string()]);
+
+    let opts = LoadOptions {
+        model: Some("opus".to_string()),
+        ..default_load_opts(dir.path())
+    };
+    let result = load_records(&opts);
+    assert_eq!(result.records.len(), 1);
+    assert!(!result.records[0].advisor);
+}
+
+#[test]
+fn test_iterations_without_advisor_add_no_records() {
+    let mut rec = advisor_rec();
+    let iterations = rec["message"]["usage"]["iterations"]
+        .as_array_mut()
+        .unwrap();
+    iterations.remove(1);
+    let dir = make_fixture(&[rec]);
+    let result = load_records(&default_load_opts(dir.path()));
+    assert_eq!(result.records.len(), 1);
+}

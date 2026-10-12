@@ -397,6 +397,7 @@ struct TokenRecord {
     inference_geo: Option<String>,    // usage.inference_geo ("us" = 1.1x)
     message_id: Option<String>,
     request_id: Option<String>,
+    advisor: bool,                    // advisor sub-request (see "Advisor calls")
 }
 
 struct PricingData {
@@ -466,8 +467,8 @@ Streaming entries share the same `messageId:requestId` key with increasing `outp
 Pricing sources, lowest to highest precedence:
 
 1. `src/pricing-data.json`: a LiteLLM snapshot covering Claude, GLM, Kimi, and MiniMax (popular coding LLMs with official Claude Code-compatible API endpoints), refreshed with `cargo run --bin update-pricing`. With `--live-pricing`, the same data is fetched from LiteLLM at runtime instead.
-2. `src/pricing-overrides.json`: hand-maintained official Anthropic list prices for current Claude models (Fable / Mythos 5 and 5.1, Opus 5.5 / 5 / 4.8 / 4.7 / 4.6 / 4.5, Sonnet 5.5 / 5 / 4.6 / 4.5, Haiku 4.5, under their undated ids, plus the dated ids LiteLLM uses for the 4.5 models, e.g. `claude-opus-4-5-20251101`), with the 1-hour cache-write rate, fast-mode multipliers, and a zero-rate `<synthetic>` entry. Always merged on top of (1), including with `--live-pricing`.
-3. `--pricing-data <path>`: your file. Each model in it replaces the bundled entry's rates; if it omits `cacheCreation1hCostPerToken` or `fastModeMultiplier`, those are inherited from the bundled entry with the same name (a model not in the bundled table gets neither).
+2. `src/pricing-overrides.json`: hand-maintained official Anthropic list prices for current Claude models (Fable / Mythos 5 and 5.1, Opus 5.5 / 5 / 4.8 / 4.7 / 4.6 / 4.5, Sonnet 5.5 / 5 / 4.6 / 4.5, Haiku 5.5 / 4.5, under their undated ids, plus the dated ids LiteLLM uses for the 4.5 models, e.g. `claude-opus-4-5-20251101`), with the 1-hour cache-write rate, fast-mode multipliers, and a zero-rate `<synthetic>` entry. Always merged on top of (1), including with `--live-pricing`.
+3. `--pricing-data <path>`: your file. Each model in it replaces the bundled entry's rates; if it omits `cacheCreation1hCostPerToken`, `fastModeMultiplier` or `longContext`, those are inherited from the bundled entry with the same name (a model not in the bundled table gets none of them).
 
 A model entry (per-token USD):
 
@@ -484,6 +485,26 @@ A model entry (per-token USD):
 
 The last two fields are optional. Without `cacheCreation1hCostPerToken` the 1-hour cache write costs 2x input; without `fastModeMultiplier` fast mode costs the same as standard.
 
+A model priced by prompt length (Claude Haiku 5.5) also has a `longContext` tier with the same rate fields plus `thresholdTokens`:
+
+```json
+"claude-haiku-5-5": {
+  "inputCostPerToken": 1e-7,
+  "outputCostPerToken": 5e-7,
+  "cacheCreationCostPerToken": 1.25e-7,
+  "cacheReadCostPerToken": 1e-8,
+  "cacheCreation1hCostPerToken": 2e-7,
+  "longContext": {
+    "thresholdTokens": 100000,
+    "inputCostPerToken": 5e-7,
+    "outputCostPerToken": 2.5e-6,
+    "cacheCreationCostPerToken": 6.25e-7,
+    "cacheReadCostPerToken": 5e-8,
+    "cacheCreation1hCostPerToken": 1e-6
+  }
+}
+```
+
 Per-record cost:
 
 ```
@@ -494,10 +515,12 @@ Per-record cost:
 + cache_creation_1h_tokens x cacheCreation1hCostPerToken (default 2 x input)
 ```
 
+- **Prompt-length tier**: when a record's prompt (`input_tokens + cache_creation_tokens + cache_read_tokens`) is over `longContext.thresholdTokens`, every component uses the `longContext` rates (its 1-hour write defaults to 2x its input rate). Only Haiku 5.5 has one (over 100,000 tokens); other models bill the full context window at one rate.
 - The 5-minute / 1-hour split comes from `usage.cache_creation.ephemeral_5m_input_tokens` / `ephemeral_1h_input_tokens`. Rows without it count every cache write as 5-minute, and tokens the split does not account for are billed as 5-minute too.
 - **Fast mode**: `usage.speed == "fast"` multiplies every component by the model's `fastModeMultiplier` (2x on Opus 5.5, Opus 5, and Opus 4.8; other models ignore the flag).
 - **Inference geo**: `usage.inference_geo == "us"` multiplies every component by 1.1. Both multipliers stack.
 - `<synthetic>` rows (Claude Code placeholders) are skipped when loading; the zero-rate entry keeps library callers who price them at $0.
+- **Advisor calls**: a message that consulted the advisor tool lists its API requests in `usage.iterations`. Its top-level `usage` covers only the `message` requests; each `advisor_message` request is loaded as an extra record with `advisor: true`, the advisor's own `model` and tokens, and the message's `line`, `message_id` and `request_id`. `--model` filters apply to that model.
 
 Model lookup (`match_model_name`):
 

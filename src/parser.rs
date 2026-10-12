@@ -294,6 +294,35 @@ struct RawUsage {
     speed: Option<String>,
     #[serde(default)]
     inference_geo: Option<String>,
+    /// Per-request breakdown of a message whose turn made several API
+    /// requests. The top-level totals cover only the `message` entries; an
+    /// `advisor_message` entry (the advisor tool's request, on its own
+    /// model) is billed on top and becomes its own [`TokenRecord`].
+    #[serde(default)]
+    iterations: Option<Vec<RawIteration>>,
+}
+
+/// One `usage.iterations[]` entry.
+#[derive(Deserialize, Default)]
+struct RawIteration {
+    #[serde(default, rename = "type")]
+    kind: Option<String>,
+    #[serde(default)]
+    model: Option<String>,
+    #[serde(default)]
+    input_tokens: Option<u64>,
+    #[serde(default)]
+    output_tokens: Option<u64>,
+    #[serde(default)]
+    cache_creation_input_tokens: Option<u64>,
+    #[serde(default)]
+    cache_read_input_tokens: Option<u64>,
+    #[serde(default)]
+    cache_creation: Option<RawCacheCreation>,
+    #[serde(default)]
+    speed: Option<String>,
+    #[serde(default)]
+    inference_geo: Option<String>,
 }
 
 /// `usage.cache_creation` — the per-TTL split of `cache_creation_input_tokens`.
@@ -843,13 +872,6 @@ pub fn load_records(options: &LoadOptions) -> LoadResult {
             }
         }
 
-        // model filter
-        if let Some(ref filter_lower) = model_filter_lower {
-            if !model.to_lowercase().contains(filter_lower.as_str()) {
-                continue;
-            }
-        }
-
         // session filter
         if let Some(ref filter_lower) = session_filter_lower {
             if !fi.session_id.to_lowercase().contains(filter_lower.as_str()) {
@@ -872,21 +894,6 @@ pub fn load_records(options: &LoadOptions) -> LoadResult {
         let speed = usage.and_then(|u| u.speed.clone());
         let inference_geo = usage.and_then(|u| u.inference_geo.clone());
 
-        // Update meta in same pass
-        earliest = Some(match earliest {
-            None => tr.timestamp,
-            Some(e) => e.min(tr.timestamp),
-        });
-        latest = Some(match latest {
-            None => tr.timestamp,
-            Some(l) => l.max(tr.timestamp),
-        });
-
-        let model_owned = model.to_string();
-        projects_set.insert(fi.project.clone());
-        models_set.insert(model_owned.clone());
-        sessions_set.insert(fi.session_id.clone());
-
         let tool_names = rec
             .message
             .as_ref()
@@ -896,9 +903,9 @@ pub fn load_records(options: &LoadOptions) -> LoadResult {
         let message_id = rec.message.as_ref().and_then(|m| m.id.clone());
         let request_id = rec.request_id.clone();
 
-        filtered_records.push(TokenRecord {
+        let main = TokenRecord {
             timestamp: tr.timestamp,
-            model: model_owned,
+            model: model.to_string(),
             session_id: fi.session_id.clone(),
             project: fi.project.clone(),
             agent_id: fi.agent_id.clone(),
@@ -914,7 +921,61 @@ pub fn load_records(options: &LoadOptions) -> LoadResult {
             inference_geo,
             message_id,
             request_id,
-        });
+            advisor: false,
+        };
+
+        // Advisor sub-requests (`usage.iterations[type=advisor_message]`),
+        // each on its own model; the message's top-level usage leaves them out.
+        let advisors: Vec<TokenRecord> = usage
+            .and_then(|u| u.iterations.as_ref())
+            .into_iter()
+            .flatten()
+            .filter(|it| it.kind.as_deref() == Some("advisor_message"))
+            .filter_map(|it| {
+                let it_model = it.model.as_deref().filter(|m| !m.is_empty())?;
+                let cache_creation_tokens = it.cache_creation_input_tokens.unwrap_or(0);
+                let (c5m, c1h) =
+                    split_cache_creation(cache_creation_tokens, it.cache_creation.as_ref());
+                Some(TokenRecord {
+                    model: it_model.to_string(),
+                    tool_names: String::new(),
+                    input_tokens: it.input_tokens.unwrap_or(0),
+                    output_tokens: it.output_tokens.unwrap_or(0),
+                    cache_creation_tokens,
+                    cache_read_tokens: it.cache_read_input_tokens.unwrap_or(0),
+                    cache_creation_5m_tokens: c5m,
+                    cache_creation_1h_tokens: c1h,
+                    speed: it.speed.clone(),
+                    inference_geo: it.inference_geo.clone(),
+                    advisor: true,
+                    ..main.clone()
+                })
+            })
+            .collect();
+
+        for record in std::iter::once(main).chain(advisors) {
+            // model filter
+            if let Some(ref filter_lower) = model_filter_lower {
+                if !record.model.to_lowercase().contains(filter_lower.as_str()) {
+                    continue;
+                }
+            }
+
+            // Update meta in same pass
+            earliest = Some(match earliest {
+                None => tr.timestamp,
+                Some(e) => e.min(tr.timestamp),
+            });
+            latest = Some(match latest {
+                None => tr.timestamp,
+                Some(l) => l.max(tr.timestamp),
+            });
+            projects_set.insert(fi.project.clone());
+            models_set.insert(record.model.clone());
+            sessions_set.insert(fi.session_id.clone());
+
+            filtered_records.push(record);
+        }
     }
 
     let meta = RecordsMeta {

@@ -39,6 +39,11 @@ pub struct TokenRecord {
     pub message_id: Option<String>,
     /// API request id (`requestId` in the JSONL). See `message_id` for usage.
     pub request_id: Option<String>,
+    /// `true` for an advisor sub-request: one `usage.iterations[]` entry of
+    /// type `advisor_message`, priced at its own `model`. It shares `line`,
+    /// `message_id` and `request_id` with the record of the message that
+    /// called the advisor (whose `usage` totals leave the advisor out).
+    pub advisor: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -60,6 +65,7 @@ pub struct PricedTokenRecord {
     pub inference_geo: Option<String>,
     pub message_id: Option<String>,
     pub request_id: Option<String>,
+    pub advisor: bool,
     pub input_cost: f64,
     pub cache_creation_cost: f64,
     pub cache_read_cost: f64,
@@ -93,6 +99,7 @@ impl PricedTokenRecord {
             inference_geo: record.inference_geo.clone(),
             message_id: record.message_id.clone(),
             request_id: record.request_id.clone(),
+            advisor: record.advisor,
             input_cost,
             cache_creation_cost,
             cache_read_cost,
@@ -141,6 +148,30 @@ pub struct ModelPricing {
     /// has no fast-mode pricing and the flag is ignored.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fast_mode_multiplier: Option<f64>,
+    /// Prompt-length pricing tier (`longContext`), e.g. Claude Haiku 5.5's
+    /// higher rates for prompts over 100,000 tokens. `None` → one rate for
+    /// every prompt length.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub long_context: Option<LongContextPricing>,
+}
+
+/// Rates for requests whose prompt is longer than `threshold_tokens`.
+///
+/// The prompt length of a request counts all of its input tokens:
+/// `input_tokens + cache_creation_tokens + cache_read_tokens`. A request
+/// **over** the threshold pays these rates for every token category,
+/// including the cached part and the output.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LongContextPricing {
+    pub threshold_tokens: u64,
+    pub cache_creation_cost_per_token: f64,
+    pub cache_read_cost_per_token: f64,
+    pub input_cost_per_token: f64,
+    pub output_cost_per_token: f64,
+    /// `None` → `2 × input_cost_per_token` of this tier.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_creation_1h_cost_per_token: Option<f64>,
 }
 
 impl ModelPricing {
@@ -149,6 +180,28 @@ impl ModelPricing {
     pub fn cache_creation_1h_rate(&self) -> f64 {
         self.cache_creation_1h_cost_per_token
             .unwrap_or(2.0 * self.input_cost_per_token)
+    }
+
+    /// The rates that apply to a request with `prompt_tokens` of input
+    /// (input + cache writes + cache reads): the `long_context` tier's when
+    /// the prompt is over its threshold, else these. The returned pricing
+    /// keeps `fast_mode_multiplier` and has no `long_context` of its own.
+    pub fn for_prompt_tokens(&self, prompt_tokens: u64) -> ModelPricing {
+        match &self.long_context {
+            Some(lc) if prompt_tokens > lc.threshold_tokens => ModelPricing {
+                cache_creation_cost_per_token: lc.cache_creation_cost_per_token,
+                cache_read_cost_per_token: lc.cache_read_cost_per_token,
+                input_cost_per_token: lc.input_cost_per_token,
+                output_cost_per_token: lc.output_cost_per_token,
+                cache_creation_1h_cost_per_token: lc.cache_creation_1h_cost_per_token,
+                fast_mode_multiplier: self.fast_mode_multiplier,
+                long_context: None,
+            },
+            _ => ModelPricing {
+                long_context: None,
+                ..self.clone()
+            },
+        }
     }
 }
 
@@ -509,6 +562,7 @@ mod tests {
             cache_read_tokens: 5,
             message_id: Some("msg-id".to_string()),
             request_id: Some("req-id".to_string()),
+            advisor: false,
             speed: None,
             inference_geo: None,
         };

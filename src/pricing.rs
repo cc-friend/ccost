@@ -64,7 +64,7 @@ pub fn load_pricing() -> PricingData {
 /// Precedence (highest last): bundled LiteLLM snapshot < bundled overrides
 /// < this file. A model in the user file replaces the entry's four base
 /// rates; when the user entry omits `cacheCreation1hCostPerToken` /
-/// `fastModeMultiplier` and the bundled table has an entry under the same
+/// `fastModeMultiplier` / `longContext` and the bundled table has an entry under the same
 /// key, those optional fields are inherited from it (so a pre-0.6 user file
 /// keeps fast mode and the official 1h rate). A non-empty user `fetchedAt`
 /// replaces the bundled one.
@@ -80,6 +80,9 @@ pub fn load_pricing_from_file(file_path: &str) -> Result<PricingData, Box<dyn st
             }
             if entry.fast_mode_multiplier.is_none() {
                 entry.fast_mode_multiplier = bundled.fast_mode_multiplier;
+            }
+            if entry.long_context.is_none() {
+                entry.long_context = bundled.long_context.clone();
             }
         }
         pricing.models.insert(model, entry);
@@ -280,7 +283,10 @@ pub fn match_model_name<'a>(
 
 /// Calculate costs for a slice of token records using pricing data.
 ///
-/// Per record, with the model's matched [`ModelPricing`]:
+/// Per record, with the model's matched [`ModelPricing`] — or its
+/// `long_context` tier when the record's prompt (`input_tokens +
+/// cache_creation_tokens + cache_read_tokens`) is over the tier's
+/// threshold (see [`ModelPricing::for_prompt_tokens`]):
 ///
 /// ```text
 /// input_cost          = input_tokens × input_cost_per_token
@@ -349,6 +355,9 @@ pub fn calculate_cost(
 /// The four cost components `[input, cache_creation, cache_read, output]`
 /// of one record — see [`calculate_cost`] for the formula.
 fn record_costs(record: &TokenRecord, pricing: &ModelPricing) -> [f64; 4] {
+    let pricing = &pricing.for_prompt_tokens(
+        record.input_tokens + record.cache_creation_tokens + record.cache_read_tokens,
+    );
     let mut costs = [
         record.input_tokens as f64 * pricing.input_cost_per_token,
         record.cache_creation_5m_tokens as f64 * pricing.cache_creation_cost_per_token
@@ -372,6 +381,7 @@ fn record_costs(record: &TokenRecord, pricing: &ModelPricing) -> [f64; 4] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::LongContextPricing;
     use std::collections::HashMap;
 
     fn make_pricing(models: Vec<(&str, f64, f64, f64, f64)>) -> HashMap<String, ModelPricing> {
@@ -591,6 +601,7 @@ mod tests {
             cache_read_tokens: 200,
             message_id: None,
             request_id: None,
+            advisor: false,
             speed: None,
             inference_geo: None,
         }];
@@ -624,6 +635,7 @@ mod tests {
             cache_read_tokens: 0,
             message_id: None,
             request_id: None,
+            advisor: false,
             speed: None,
             inference_geo: None,
         }];
@@ -660,6 +672,7 @@ mod tests {
             cache_read_tokens: 0,
             message_id: None,
             request_id: None,
+            advisor: false,
             speed: None,
             inference_geo: None,
         }];
@@ -691,6 +704,7 @@ mod tests {
                 cache_read_tokens: 0,
                 message_id: None,
                 request_id: None,
+                advisor: false,
                 speed: None,
                 inference_geo: None,
             },
@@ -710,6 +724,7 @@ mod tests {
                 cache_read_tokens: 0,
                 message_id: None,
                 request_id: None,
+                advisor: false,
                 speed: None,
                 inference_geo: None,
             },
@@ -743,6 +758,7 @@ mod tests {
                 cache_read_tokens: 0,
                 message_id: None,
                 request_id: None,
+                advisor: false,
                 speed: None,
                 inference_geo: None,
             },
@@ -762,6 +778,7 @@ mod tests {
                 cache_read_tokens: 0,
                 message_id: None,
                 request_id: None,
+                advisor: false,
                 speed: None,
                 inference_geo: None,
             },
@@ -797,6 +814,7 @@ mod tests {
             cache_read_tokens: 90,
             message_id: None,
             request_id: None,
+            advisor: false,
             speed: None,
             inference_geo: None,
         };
@@ -850,6 +868,7 @@ mod tests {
             inference_geo: geo.map(str::to_string),
             message_id: None,
             request_id: None,
+            advisor: false,
         }
     }
 
@@ -924,9 +943,9 @@ mod tests {
     #[test]
     fn test_cost_fast_mode_ignored_without_multiplier() {
         // sonnet-5-5 has no fastModeMultiplier → unchanged.
-        // in 1000×2e-6=0.002; out 500×1e-5=0.005; read 10000×2e-7=0.002;
-        // write 2000×2.5e-6 + 3000×4e-6 = 0.017; total 0.026
-        let standard = [0.002, 0.017, 0.002, 0.005, 0.026];
+        // in 1000×2e-6=0.002; out 500×1e-5=0.005; read 10000×1e-7=0.001;
+        // write 2000×2.5e-6 + 3000×4e-6 = 0.017; total 0.025
+        let standard = [0.002, 0.017, 0.001, 0.005, 0.025];
         let p = price_one(usage_record(
             "claude-sonnet-5-5",
             1000,
@@ -963,7 +982,7 @@ mod tests {
             None,
             Some("us"),
         ));
-        assert_costs(&p, [0.0022, 0.0187, 0.0022, 0.0055, 0.0286]);
+        assert_costs(&p, [0.0022, 0.0187, 0.0011, 0.0055, 0.0275]);
         // Any other geo → standard price.
         let p = price_one(usage_record(
             "claude-sonnet-5-5",
@@ -975,7 +994,7 @@ mod tests {
             None,
             Some("global"),
         ));
-        assert_costs(&p, [0.002, 0.017, 0.002, 0.005, 0.026]);
+        assert_costs(&p, [0.002, 0.017, 0.001, 0.005, 0.025]);
     }
 
     #[test]
@@ -993,6 +1012,71 @@ mod tests {
         ));
         assert_costs(&p, [0.0088, 0.0748, 0.0044, 0.022, 0.11]);
         assert_eq!(US_INFERENCE_GEO_MULTIPLIER, 1.1);
+    }
+
+    #[test]
+    fn test_cost_long_context_tier_haiku_5_5() {
+        // Prompt = input + cache writes + cache reads = 100_000 → not over
+        // the threshold: standard rates (in 0.1, 5m 0.125, 1h 0.2, read
+        // 0.01, out 0.5 USD/MTok).
+        // in 40000×1e-7=0.004; write 10000×1.25e-7 + 10000×2e-7 = 0.00325;
+        // read 40000×1e-8=0.0004; out 2000×5e-7=0.001; total 0.00865
+        let p = price_one(usage_record(
+            "claude-haiku-5-5",
+            40_000,
+            2_000,
+            10_000,
+            10_000,
+            40_000,
+            None,
+            None,
+        ));
+        assert_costs(&p, [0.004, 0.00325, 0.0004, 0.001, 0.00865]);
+        // One more cached token → over 100K: every category at the higher
+        // rates (in 0.5, 5m 0.625, 1h 1, read 0.05, out 2.5 USD/MTok).
+        // in 0.02; write 10000×6.25e-7 + 10000×1e-6 = 0.01625;
+        // read 40001×5e-8 = 0.00200005; out 0.005; total 0.04325005
+        let p = price_one(usage_record(
+            "claude-haiku-5-5",
+            40_000,
+            2_000,
+            10_000,
+            10_000,
+            40_001,
+            None,
+            None,
+        ));
+        assert_costs(&p, [0.02, 0.01625, 0.00200005, 0.005, 0.04325005]);
+        // The US multiplier stacks on the higher tier.
+        let p = price_one(usage_record(
+            "claude-haiku-5-5",
+            100_001,
+            0,
+            0,
+            0,
+            0,
+            None,
+            Some("us"),
+        ));
+        assert_costs(&p, [0.05500055, 0.0, 0.0, 0.0, 0.05500055]);
+    }
+
+    #[test]
+    fn test_long_context_1h_falls_back_to_twice_tier_input() {
+        let mut models = make_pricing(vec![("tiered-1", 1e-6, 0.0, 0.0, 0.0)]);
+        models.get_mut("tiered-1").unwrap().long_context = Some(LongContextPricing {
+            threshold_tokens: 10,
+            input_cost_per_token: 3e-6,
+            ..Default::default()
+        });
+        let pricing = PricingData {
+            fetched_at: String::new(),
+            models,
+        };
+        let rec = usage_record("tiered-1", 0, 0, 0, 1000, 0, None, None);
+        let p = calculate_cost(&[rec], Some(&pricing)).remove(0);
+        // 1000 1h-write tokens × (2 × 3e-6)
+        assert_costs(&p, [0.0, 0.006, 0.0, 0.0, 0.006]);
     }
 
     #[test]
@@ -1385,7 +1469,7 @@ mod tests {
         );
         assert_rates(
             &pricing.models["claude-sonnet-5-5"],
-            [2e-6, 1e-5, 2.5e-6, 4e-6, 2e-7],
+            [2e-6, 1e-5, 2.5e-6, 4e-6, 1e-7],
             "sonnet-5-5",
         );
         assert_rates(
@@ -1404,8 +1488,24 @@ mod tests {
         for m in ["claude-opus-4-7", "claude-sonnet-5-5", "claude-fable-5-1"] {
             assert_eq!(pricing.models[m].fast_mode_multiplier, None, "{m}");
         }
-        // Overrides fetchedAt (2026-09-30) is newer than the LiteLLM snapshot.
-        assert_eq!(pricing.fetched_at, "2026-09-30T00:00:00.000Z");
+        let haiku = &pricing.models["claude-haiku-5-5"];
+        assert_rates(haiku, [1e-7, 5e-7, 1.25e-7, 2e-7, 1e-8], "haiku-5-5");
+        assert_eq!(haiku.fast_mode_multiplier, None);
+        let lc = haiku.long_context.as_ref().expect("haiku-5-5 longContext");
+        assert_eq!(lc.threshold_tokens, 100_000);
+        assert_rates(
+            &haiku.for_prompt_tokens(100_001),
+            [5e-7, 2.5e-6, 6.25e-7, 1e-6, 5e-8],
+            "haiku-5-5 >100K",
+        );
+        // Only Haiku 5.5 has a prompt-length tier.
+        for (name, p) in &pricing.models {
+            if name != "claude-haiku-5-5" {
+                assert!(p.long_context.is_none(), "{name}");
+            }
+        }
+        // Overrides fetchedAt (2026-10-12) is newer than the LiteLLM snapshot.
+        assert_eq!(pricing.fetched_at, "2026-10-12T00:00:00.000Z");
     }
 
     #[test]
@@ -1472,6 +1572,30 @@ mod tests {
         assert_eq!(p.cache_creation_1h_cost_per_token, Some(8e-6));
         // Other override entries are untouched.
         assert_eq!(pricing.models["claude-opus-5"].input_cost_per_token, 5e-6);
+    }
+
+    #[test]
+    fn test_user_file_inherits_long_context() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("pricing.json");
+        let json = serde_json::json!({
+            "models": {
+                "claude-haiku-5-5": {
+                    "inputCostPerToken": 1.0,
+                    "outputCostPerToken": 2.0,
+                    "cacheCreationCostPerToken": 3.0,
+                    "cacheReadCostPerToken": 4.0
+                }
+            }
+        });
+        std::fs::write(&path, serde_json::to_string(&json).unwrap()).unwrap();
+        let pricing = load_pricing_from_file(path.to_str().unwrap()).unwrap();
+        let p = &pricing.models["claude-haiku-5-5"];
+        assert_eq!(p.input_cost_per_token, 1.0);
+        assert_eq!(
+            p.long_context.as_ref().map(|lc| lc.threshold_tokens),
+            Some(100_000)
+        );
     }
 
     #[test]

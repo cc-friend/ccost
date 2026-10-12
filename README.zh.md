@@ -395,6 +395,7 @@ struct TokenRecord {
     inference_geo: Option<String>,    // usage.inference_geo（"us" = 1.1 倍）
     message_id: Option<String>,
     request_id: Option<String>,
+    advisor: bool,                    // advisor 子请求（见“Advisor 调用”）
 }
 
 struct PricingData {
@@ -464,8 +465,8 @@ struct GroupedData {
 定价来源，优先级从低到高：
 
 1. `src/pricing-data.json`：LiteLLM 快照，包含 Claude、GLM、Kimi 和 MiniMax（官方提供 Claude Code 兼容 API 的热门编程大模型）的模型，用 `cargo run --bin update-pricing` 刷新。使用 `--live-pricing` 时改为运行时从 LiteLLM 获取。
-2. `src/pricing-overrides.json`：手工维护的 Anthropic 官方价格，覆盖当前的 Claude 模型（Fable / Mythos 5 和 5.1、Opus 5.5 / 5 / 4.8 / 4.7 / 4.6 / 4.5、Sonnet 5.5 / 5 / 4.6 / 4.5、Haiku 4.5，均为不带日期的 id，另有 LiteLLM 所用的 4.5 系列带日期 id，如 `claude-opus-4-5-20251101`），包含 1 小时缓存写入价、快速模式倍率，以及零价格的 `<synthetic>` 条目。始终合并在 (1) 之上，`--live-pricing` 时也一样。
-3. `--pricing-data <path>`：用户文件。其中每个模型替换内置条目的价格；若省略 `cacheCreation1hCostPerToken` 或 `fastModeMultiplier`，则从同名内置条目继承（内置表中没有的模型两者都不设）。
+2. `src/pricing-overrides.json`：手工维护的 Anthropic 官方价格，覆盖当前的 Claude 模型（Fable / Mythos 5 和 5.1、Opus 5.5 / 5 / 4.8 / 4.7 / 4.6 / 4.5、Sonnet 5.5 / 5 / 4.6 / 4.5、Haiku 5.5 / 4.5，均为不带日期的 id，另有 LiteLLM 所用的 4.5 系列带日期 id，如 `claude-opus-4-5-20251101`），包含 1 小时缓存写入价、快速模式倍率，以及零价格的 `<synthetic>` 条目。始终合并在 (1) 之上，`--live-pricing` 时也一样。
+3. `--pricing-data <path>`：用户文件。其中每个模型替换内置条目的价格；若省略 `cacheCreation1hCostPerToken`、`fastModeMultiplier` 或 `longContext`，则从同名内置条目继承（内置表中没有的模型都不设）。
 
 模型条目（每 token 美元价格）：
 
@@ -482,6 +483,26 @@ struct GroupedData {
 
 最后两个字段可选。没有 `cacheCreation1hCostPerToken` 时，1 小时缓存写入按输入价的 2 倍计；没有 `fastModeMultiplier` 时，快速模式与标准模式同价。
 
+按提示长度分档计价的模型（Claude Haiku 5.5）另有 `longContext` 档，字段与上面相同，外加 `thresholdTokens`：
+
+```json
+"claude-haiku-5-5": {
+  "inputCostPerToken": 1e-7,
+  "outputCostPerToken": 5e-7,
+  "cacheCreationCostPerToken": 1.25e-7,
+  "cacheReadCostPerToken": 1e-8,
+  "cacheCreation1hCostPerToken": 2e-7,
+  "longContext": {
+    "thresholdTokens": 100000,
+    "inputCostPerToken": 5e-7,
+    "outputCostPerToken": 2.5e-6,
+    "cacheCreationCostPerToken": 6.25e-7,
+    "cacheReadCostPerToken": 5e-8,
+    "cacheCreation1hCostPerToken": 1e-6
+  }
+}
+```
+
 每条记录的费用：
 
 ```
@@ -493,8 +514,10 @@ struct GroupedData {
 ```
 
 - 5 分钟 / 1 小时拆分来自 `usage.cache_creation.ephemeral_5m_input_tokens` / `ephemeral_1h_input_tokens`。没有拆分的记录，全部缓存写入按 5 分钟计；拆分未覆盖的 token 也按 5 分钟计。
+- **按提示长度分档**：一条记录的提示长度（`input_tokens + cache_creation_tokens + cache_read_tokens`）超过 `longContext.thresholdTokens` 时，各项都按 `longContext` 的价格计（其 1 小时缓存写入默认为该档输入价的 2 倍）。目前只有 Haiku 5.5 分档（超过 100,000 token）；其他模型整个上下文窗口同价。
 - **快速模式**：`usage.speed == "fast"` 时，各项费用乘以该模型的 `fastModeMultiplier`（Opus 5.5、Opus 5、Opus 4.8 为 2 倍；其他模型忽略此标记）。
 - **推理地域**：`usage.inference_geo == "us"` 时，各项费用乘以 1.1。两个倍率可叠加。
+- **Advisor 调用**：调用过 advisor 工具的消息会在 `usage.iterations` 中列出各次 API 请求。其顶层 `usage` 只统计 `message` 请求；每个 `advisor_message` 请求会额外载入为一条 `advisor: true` 的记录，使用 advisor 自己的 `model` 和 token 数，`line`、`message_id`、`request_id` 与该消息相同。`--model` 过滤按这个模型名匹配。
 - `<synthetic>` 记录（Claude Code 的占位行）在加载时被跳过；零价格条目让自行计价的库调用方得到 $0。
 
 模型查找（`match_model_name`）：

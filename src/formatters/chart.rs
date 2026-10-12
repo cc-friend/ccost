@@ -734,6 +734,7 @@ mod tests {
             cache_read_tokens: 0,
             message_id: None,
             request_id: None,
+            advisor: false,
             speed: None,
             inference_geo: None,
             input_cost: total_cost / 2.0,

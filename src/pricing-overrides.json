@@ -1,5 +1,5 @@
 {
-  "fetchedAt": "2026-09-30T00:00:00.000Z",
+  "fetchedAt": "2026-10-12T00:00:00.000Z",
   "models": {
     "<synthetic>": {
       "cacheCreation1hCostPerToken": 0,
@@ -35,6 +35,21 @@
       "cacheReadCostPerToken": 1e-07,
       "inputCostPerToken": 1e-06,
       "outputCostPerToken": 5e-06
+    },
+    "claude-haiku-5-5": {
+      "cacheCreation1hCostPerToken": 2e-07,
+      "cacheCreationCostPerToken": 1.25e-07,
+      "cacheReadCostPerToken": 1e-08,
+      "inputCostPerToken": 1e-07,
+      "outputCostPerToken": 5e-07,
+      "longContext": {
+        "cacheCreation1hCostPerToken": 1e-06,
+        "cacheCreationCostPerToken": 6.25e-07,
+        "cacheReadCostPerToken": 5e-08,
+        "inputCostPerToken": 5e-07,
+        "outputCostPerToken": 2.5e-06,
+        "thresholdTokens": 100000
+      }
     },
     "claude-mythos-5": {
       "cacheCreation1hCostPerToken": 2e-05,
@@ -133,7 +148,7 @@
     "claude-sonnet-5-5": {
       "cacheCreation1hCostPerToken": 4e-06,
       "cacheCreationCostPerToken": 2.5e-06,
-      "cacheReadCostPerToken": 2e-07,
+      "cacheReadCostPerToken": 1e-07,
       "inputCostPerToken": 2e-06,
       "outputCostPerToken": 1e-05
     }
