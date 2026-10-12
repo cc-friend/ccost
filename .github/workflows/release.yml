@@ -152,7 +152,10 @@ jobs:
       contents: read
       id-token: write
     steps:
+      # On a manual run, publish the npm files of the tag, not of the branch.
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag || github.ref }}
 
       - uses: actions/setup-node@v5
         with:
@@ -166,8 +169,11 @@ jobs:
         working-directory: npm
         env:
           TAG: ${{ inputs.tag || github.ref_name }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.]+)?$ ]] || { echo "bad tag: $TAG"; exit 1; }
+          # install.js downloads the binaries from this release.
+          gh release view "$TAG" > /dev/null || { echo "no GitHub release $TAG"; exit 1; }
           VERSION=${TAG#v}
           npm version "$VERSION" --no-git-tag-version
           npm publish --provenance

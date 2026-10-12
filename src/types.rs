@@ -2,6 +2,9 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+/// One API request of a deduplicated assistant row: the row itself, or —
+/// for a multi-request turn — one of its `usage.iterations[]` requests
+/// (several records then share `line`, `message_id` and `request_id`).
 #[derive(Debug, Clone)]
 pub struct TokenRecord {
     pub timestamp: DateTime<Utc>,

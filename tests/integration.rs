@@ -3959,30 +3959,114 @@ fn advisor_rec() -> serde_json::Value {
 fn test_advisor_iteration_becomes_its_own_record() {
     let dir = make_fixture(&[advisor_rec()]);
     let result = load_records(&default_load_opts(dir.path()));
-    assert_eq!(result.records.len(), 2);
+    // Two `message` requests (they add up to the top-level usage) + one
+    // advisor request.
+    assert_eq!(result.records.len(), 3);
 
-    let main = &result.records[0];
-    assert!(!main.advisor);
-    assert_eq!(main.model, "claude-opus-5-5");
-    assert_eq!(main.input_tokens, 4);
-    assert_eq!(main.output_tokens, 619);
+    let (first, second) = (&result.records[0], &result.records[1]);
+    for r in [first, second] {
+        assert!(!r.advisor);
+        assert_eq!(r.model, "claude-opus-5-5");
+    }
+    assert_eq!(
+        (
+            first.input_tokens,
+            first.output_tokens,
+            first.cache_read_tokens
+        ),
+        (2, 211, 66791)
+    );
+    // Each request keeps its own 5m/1h split.
+    assert_eq!(
+        (
+            first.cache_creation_5m_tokens,
+            first.cache_creation_1h_tokens
+        ),
+        (0, 1311)
+    );
+    assert_eq!(
+        (
+            second.cache_creation_5m_tokens,
+            second.cache_creation_1h_tokens
+        ),
+        (1748, 0)
+    );
+    assert_eq!(first.input_tokens + second.input_tokens, 4);
+    assert_eq!(first.output_tokens + second.output_tokens, 619);
 
-    let adv = &result.records[1];
+    let adv = &result.records[2];
     assert!(adv.advisor);
     assert_eq!(adv.model, "claude-fable-5-1");
     assert_eq!(adv.input_tokens, 64651);
     assert_eq!(adv.output_tokens, 6041);
     assert_eq!(adv.cache_creation_tokens, 0);
     assert_eq!(adv.cache_read_tokens, 0);
-    assert_eq!(adv.line, main.line);
-    assert_eq!(adv.message_id, main.message_id);
-    assert_eq!(adv.request_id, main.request_id);
-    assert_eq!(adv.tool_names, "");
+    assert_eq!(adv.line, first.line);
+    assert_eq!(adv.message_id, first.message_id);
+    assert_eq!(adv.request_id, first.request_id);
+    assert_eq!(adv.tool_names, first.tool_names);
     assert!(result.meta.models.contains(&"claude-fable-5-1".to_string()));
 
     // fable-5-1: in 10, out 50 USD/MTok → 0.64651 + 0.30205 = 0.94856
     let priced = calculate_cost(&result.records, None);
-    assert!(approx_eq(priced[1].total_cost, 0.94856));
+    assert!(approx_eq(priced[2].total_cost, 0.94856));
+}
+
+#[test]
+fn test_iterations_that_do_not_add_up_keep_the_top_level_record() {
+    let mut rec = advisor_rec();
+    rec["message"]["usage"]["input_tokens"] = serde_json::json!(5);
+    let dir = make_fixture(&[rec]);
+    let result = load_records(&default_load_opts(dir.path()));
+    // Top-level message record + advisor record.
+    assert_eq!(result.records.len(), 2);
+    assert_eq!(result.records[0].input_tokens, 5);
+    assert_eq!(result.records[0].cache_creation_1h_tokens, 1311);
+    assert_eq!(result.records[0].cache_creation_5m_tokens, 1748);
+}
+
+#[test]
+fn test_long_context_tier_is_per_request() {
+    // Two Haiku 5.5 requests of 79,878 and 85,399 prompt tokens: each is
+    // under 100K (standard rates) although their sum is not.
+    let rec = serde_json::json!({
+        "timestamp": "2026-10-10T10:00:00Z",
+        "type": "assistant",
+        "sessionId": "session-abc",
+        "message": {
+            "id": "msg_h", "role": "assistant", "model": "claude-haiku-5-5",
+            "usage": {
+                "input_tokens": 4, "output_tokens": 300,
+                "cache_read_input_tokens": 156191, "cache_creation_input_tokens": 9082,
+                "iterations": [
+                    {"type": "message", "input_tokens": 2, "output_tokens": 100,
+                     "cache_read_input_tokens": 71876, "cache_creation_input_tokens": 8000},
+                    {"type": "advisor_message", "model": "claude-fable-5-1",
+                     "input_tokens": 0, "output_tokens": 0},
+                    {"type": "message", "input_tokens": 2, "output_tokens": 200,
+                     "cache_read_input_tokens": 84315, "cache_creation_input_tokens": 1082}
+                ]
+            }
+        },
+        "requestId": "req_h",
+    });
+    let dir = make_fixture(&[rec]);
+    let result = load_records(&default_load_opts(dir.path()));
+    let haiku: Vec<_> = result.records.iter().filter(|r| !r.advisor).collect();
+    assert_eq!(haiku.len(), 2);
+    let priced = calculate_cost(&result.records, None);
+    let total: f64 = priced
+        .iter()
+        .filter(|r| !r.advisor)
+        .map(|r| r.total_cost)
+        .sum();
+    // Standard Haiku 5.5 rates (in 0.1, 5m 0.125, read 0.01, out 0.5 USD/MTok):
+    // in 4×1e-7 + out 300×5e-7 + read 156191×1e-8 + write 9082×1.25e-7
+    let expected = 4.0 * 1e-7 + 300.0 * 5e-7 + 156191.0 * 1e-8 + 9082.0 * 1.25e-7;
+    assert!(
+        approx_eq(total, expected),
+        "total {total}, expected {expected}"
+    );
 }
 
 #[test]
@@ -4002,12 +4086,13 @@ fn test_advisor_record_obeys_model_filter() {
         ..default_load_opts(dir.path())
     };
     let result = load_records(&opts);
-    assert_eq!(result.records.len(), 1);
-    assert!(!result.records[0].advisor);
+    // The two `message` requests of the turn.
+    assert_eq!(result.records.len(), 2);
+    assert!(result.records.iter().all(|r| !r.advisor));
 }
 
 #[test]
-fn test_iterations_without_advisor_add_no_records() {
+fn test_iterations_without_advisor_add_no_advisor_records() {
     let mut rec = advisor_rec();
     let iterations = rec["message"]["usage"]["iterations"]
         .as_array_mut()
@@ -4015,5 +4100,21 @@ fn test_iterations_without_advisor_add_no_records() {
     iterations.remove(1);
     let dir = make_fixture(&[rec]);
     let result = load_records(&default_load_opts(dir.path()));
+    // One record per `message` request, none for an advisor.
+    assert_eq!(result.records.len(), 2);
+    assert!(result.records.iter().all(|r| !r.advisor));
+}
+
+#[test]
+fn test_single_message_iteration_keeps_one_record() {
+    let mut rec = advisor_rec();
+    rec["message"]["usage"]["iterations"] = serde_json::json!([
+        {"type": "message", "input_tokens": 4, "output_tokens": 619,
+         "cache_read_input_tokens": 134893, "cache_creation_input_tokens": 3059}
+    ]);
+    let dir = make_fixture(&[rec]);
+    let result = load_records(&default_load_opts(dir.path()));
     assert_eq!(result.records.len(), 1);
+    // The top-level split is kept.
+    assert_eq!(result.records[0].cache_creation_1h_tokens, 1311);
 }

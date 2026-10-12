@@ -377,7 +377,8 @@ struct LoadOptions {
 
 enum GroupDimension { Day, Hour, Month, Session, Project, Model, Subagent, Tool, Line }
 
-// One deduplicated assistant row. PricedTokenRecord has the same fields
+// One API request of a deduplicated assistant row (see "Multi-request turns").
+// PricedTokenRecord has the same fields
 // plus input_cost, cache_creation_cost, cache_read_cost, output_cost, total_cost.
 struct TokenRecord {
     timestamp: DateTime<Utc>,
@@ -520,6 +521,7 @@ Per-record cost:
 - **Fast mode**: `usage.speed == "fast"` multiplies every component by the model's `fastModeMultiplier` (2x on Opus 5.5, Opus 5, and Opus 4.8; other models ignore the flag).
 - **Inference geo**: `usage.inference_geo == "us"` multiplies every component by 1.1. Both multipliers stack.
 - `<synthetic>` rows (Claude Code placeholders) are skipped when loading; the zero-rate entry keeps library callers who price them at $0.
+- **Multi-request turns**: a row whose `usage.iterations` lists two or more `message` requests that add up to the top-level totals loads as one record per request (same line and ids), so the prompt-length tier and the 5-minute / 1-hour split apply to each request, as the API bills them. Otherwise the row is one record from the top-level usage.
 - **Advisor calls**: a message that consulted the advisor tool lists its API requests in `usage.iterations`. Its top-level `usage` covers only the `message` requests; each `advisor_message` request is loaded as an extra record with `advisor: true`, the advisor's own `model` and tokens, and the message's `line`, `message_id` and `request_id`. `--model` filters apply to that model.
 
 Model lookup (`match_model_name`):

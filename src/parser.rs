@@ -924,36 +924,39 @@ pub fn load_records(options: &LoadOptions) -> LoadResult {
             advisor: false,
         };
 
+        let iterations: &[RawIteration] =
+            usage.and_then(|u| u.iterations.as_deref()).unwrap_or(&[]);
+
+        // A turn of several API requests lists them in `usage.iterations`
+        // and sums the `message` ones into the top-level usage. Prices
+        // depend on each request (Haiku 5.5's prompt-length tier, the
+        // per-request 5m/1h cache split), so when the `message` entries
+        // add up to the top-level totals they become one record each.
+        let message_records = per_request_records(&main, iterations);
+        let main_records = if message_records.is_empty() {
+            vec![main.clone()]
+        } else {
+            message_records
+        };
+
         // Advisor sub-requests (`usage.iterations[type=advisor_message]`),
         // each on its own model; the message's top-level usage leaves them out.
-        let advisors: Vec<TokenRecord> = usage
-            .and_then(|u| u.iterations.as_ref())
-            .into_iter()
-            .flatten()
+        let advisors: Vec<TokenRecord> = iterations
+            .iter()
             .filter(|it| it.kind.as_deref() == Some("advisor_message"))
             .filter_map(|it| {
                 let it_model = it.model.as_deref().filter(|m| !m.is_empty())?;
-                let cache_creation_tokens = it.cache_creation_input_tokens.unwrap_or(0);
-                let (c5m, c1h) =
-                    split_cache_creation(cache_creation_tokens, it.cache_creation.as_ref());
                 Some(TokenRecord {
                     model: it_model.to_string(),
-                    tool_names: String::new(),
-                    input_tokens: it.input_tokens.unwrap_or(0),
-                    output_tokens: it.output_tokens.unwrap_or(0),
-                    cache_creation_tokens,
-                    cache_read_tokens: it.cache_read_input_tokens.unwrap_or(0),
-                    cache_creation_5m_tokens: c5m,
-                    cache_creation_1h_tokens: c1h,
                     speed: it.speed.clone(),
                     inference_geo: it.inference_geo.clone(),
                     advisor: true,
-                    ..main.clone()
+                    ..iteration_record(&main, it)
                 })
             })
             .collect();
 
-        for record in std::iter::once(main).chain(advisors) {
+        for record in main_records.into_iter().chain(advisors) {
             // model filter
             if let Some(ref filter_lower) = model_filter_lower {
                 if !record.model.to_lowercase().contains(filter_lower.as_str()) {
@@ -991,6 +994,48 @@ pub fn load_records(options: &LoadOptions) -> LoadResult {
         dedup: dedup_stats,
         meta,
     }
+}
+
+/// `main` with the token counts of one `usage.iterations[]` entry.
+fn iteration_record(main: &TokenRecord, it: &RawIteration) -> TokenRecord {
+    let cache_creation_tokens = it.cache_creation_input_tokens.unwrap_or(0);
+    let (c5m, c1h) = split_cache_creation(cache_creation_tokens, it.cache_creation.as_ref());
+    TokenRecord {
+        input_tokens: it.input_tokens.unwrap_or(0),
+        output_tokens: it.output_tokens.unwrap_or(0),
+        cache_creation_tokens,
+        cache_read_tokens: it.cache_read_input_tokens.unwrap_or(0),
+        cache_creation_5m_tokens: c5m,
+        cache_creation_1h_tokens: c1h,
+        ..main.clone()
+    }
+}
+
+/// One record per `message` entry of `iterations` (same model, speed and
+/// geo as `main`) when there are at least two and their token counts add up
+/// to `main`'s; otherwise empty (the caller keeps `main` as is).
+fn per_request_records(main: &TokenRecord, iterations: &[RawIteration]) -> Vec<TokenRecord> {
+    let messages: Vec<&RawIteration> = iterations
+        .iter()
+        .filter(|it| it.kind.as_deref() == Some("message"))
+        .collect();
+    if messages.len() < 2 {
+        return Vec::new();
+    }
+    let sum = |f: fn(&RawIteration) -> Option<u64>| -> u64 {
+        messages.iter().map(|it| f(it).unwrap_or(0)).sum()
+    };
+    let adds_up = sum(|it| it.input_tokens) == main.input_tokens
+        && sum(|it| it.output_tokens) == main.output_tokens
+        && sum(|it| it.cache_read_input_tokens) == main.cache_read_tokens
+        && sum(|it| it.cache_creation_input_tokens) == main.cache_creation_tokens;
+    if !adds_up {
+        return Vec::new();
+    }
+    messages
+        .into_iter()
+        .map(|it| iteration_record(main, it))
+        .collect()
 }
 
 /// Discover project directories based on LoadOptions.
